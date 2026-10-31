@@ -31,10 +31,25 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --include=optional
 
       - name: TypeScript check
         run: npm run lint
+      - name: Start NOVA test server
+        shell: pwsh
+        run: |
+          $server = Start-Process -FilePath "cmd.exe" -ArgumentList "/c npm start" -PassThru -WindowStyle Hidden
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            if (Test-NetConnection -ComputerName 127.0.0.1 -Port 3000 -InformationLevel Quiet -WarningAction SilentlyContinue) {
+              $ready = $true
+              break
+            }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) {
+            throw "NOVA server did not start on port 3000"
+          }
 
       - name: Run tests
         run: npm test
