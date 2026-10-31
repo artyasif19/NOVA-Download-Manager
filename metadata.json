@@ -1,0 +1,6 @@
+{
+  "name": "NOVA Download Manager",
+  "description": "High-performance, privacy-first Windows download manager featuring multi-part segmented downloads, smart queue orchestration, browser extension integration, and customizable dark UI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

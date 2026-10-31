@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; NOVA Download Manager - Windows Native Messaging Host Clean Uninstaller
+
+[-HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\com.nova.downloadmanager]
+[-HKEY_CURRENT_USER\Software\Microsoft\Edge\NativeMessagingHosts\com.nova.downloadmanager]
+[-HKEY_CURRENT_USER\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.nova.downloadmanager]
+[-HKEY_CURRENT_USER\Software\Mozilla\NativeMessagingHosts\com.nova.downloadmanager]

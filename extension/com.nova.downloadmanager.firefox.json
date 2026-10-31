@@ -1,0 +1,9 @@
+{
+  "name": "com.nova.downloadmanager",
+  "description": "NOVA Download Manager Native Messaging Host for Firefox",
+  "path": "nova_host.exe",
+  "type": "stdio",
+  "allowed_extensions": [
+    "extension@nova-download-manager.local"
+  ]
+}

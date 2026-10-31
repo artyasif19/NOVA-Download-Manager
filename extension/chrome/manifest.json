@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "NOVA Download Manager Integration",
+  "version": "2.4.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0wj+rc7aelhCIRYcI/9Kp0XLyI0/uqhGnqe7ljQVYZ7yWMVP5xm/dqgBudYdN3x1FpEVgV8+7WpHHQxRLESVbFLRBZVUQf0bd5ewH1i5ak7z++XeuFX4TZ1jLk6aHQxJ8NA0xfzquODsKKYDrfo1hR3C0Tmp7M0dEbQtoP4gByJjKPSAP+kO35L2OXc+XQp1GjwRQkuHJHuU6UTcsql1ln05LULcolde7J1Z1omnltE5EDq4HPYoUYw6/dNOfhGOQ2OWhhoin3S8yPjHt3NKuLPuD1qbQyBcCeggc3pVHld6hgf+5Xfrdlajv2fNygPyWF+HudbAbkBnpQZi/KTUpQIDAQAB",
+  "description": "Seamlessly intercepts browser downloads and captures video streams for NOVA Download Manager.",
+  "permissions": [
+    "downloads",
+    "contextMenus",
+    "nativeMessaging",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "NOVA Download Manager"
+  }
+}

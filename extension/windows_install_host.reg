@@ -1,0 +1,20 @@
+Windows Registry Editor Version 5.00
+
+; NOVA Download Manager - Windows Native Messaging Host Registration
+; NOTE: Running install_host.bat is recommended to automatically resolve %LOCALAPPDATA%
+
+; Google Chrome
+[HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\com.nova.downloadmanager]
+@=hex(2):25,00,4c,00,4f,00,43,00,41,00,4c,00,41,00,50,00,50,00,44,00,41,00,54,00,41,00,25,00,5c,00,4e,00,4f,00,56,00,41,00,5c,00,63,00,6f,00,6d,00,2e,00,6e,00,6f,00,76,00,61,00,2e,00,64,00,6f,00,77,00,6e,00,6c,00,6f,00,61,00,64,00,6d,00,61,00,6e,00,61,00,67,00,65,00,72,00,2e,00,6a,00,73,00,6f,00,6e,00,00,00
+
+; Microsoft Edge
+[HKEY_CURRENT_USER\Software\Microsoft\Edge\NativeMessagingHosts\com.nova.downloadmanager]
+@=hex(2):25,00,4c,00,4f,00,43,00,41,00,4c,00,41,00,50,00,50,00,44,00,41,00,54,00,41,00,25,00,5c,00,4e,00,4f,00,56,00,41,00,5c,00,63,00,6f,00,6d,00,2e,00,6e,00,6f,00,76,00,61,00,2e,00,64,00,6f,00,77,00,6e,00,6c,00,6f,00,61,00,64,00,6d,00,61,00,6e,00,61,00,67,00,65,00,72,00,2e,00,6a,00,73,00,6f,00,6e,00,00,00
+
+; Brave Browser
+[HKEY_CURRENT_USER\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.nova.downloadmanager]
+@=hex(2):25,00,4c,00,4f,00,43,00,41,00,4c,00,41,00,50,00,50,00,44,00,41,00,54,00,41,00,25,00,5c,00,4e,00,4f,00,56,00,41,00,5c,00,63,00,6f,00,6d,00,2e,00,6e,00,6f,00,76,00,61,00,2e,00,64,00,6f,00,77,00,6e,00,6c,00,6f,00,61,00,64,00,6d,00,61,00,6e,00,61,00,67,00,65,00,72,00,2e,00,6a,00,73,00,6f,00,6e,00,00,00
+
+; Mozilla Firefox
+[HKEY_CURRENT_USER\Software\Mozilla\NativeMessagingHosts\com.nova.downloadmanager]
+@=hex(2):25,00,4c,00,4f,00,43,00,41,00,4c,00,41,00,50,00,50,00,44,00,41,00,54,00,41,00,25,00,5c,00,4e,00,4f,00,56,00,41,00,5c,00,63,00,6f,00,6d,00,2e,00,6e,00,6f,00,76,00,61,00,2e,00,64,00,6f,00,77,00,6e,00,6c,00,6f,00,61,00,64,00,6d,00,61,00,6e,00,61,00,67,00,65,00,72,00,2e,00,66,00,69,00,72,00,65,00,66,00,6f,00,78,00,2e,00,6a,00,73,00,6f,00,6e,00,00,00

@@ -1,0 +1,29 @@
+{
+  "manifest_version": 2,
+  "name": "NOVA Download Manager Integration",
+  "version": "2.4.0",
+  "description": "Seamlessly intercepts browser downloads and captures video streams for NOVA Download Manager.",
+  "permissions": [
+    "downloads",
+    "contextMenus",
+    "nativeMessaging",
+    "storage",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "extension@nova-download-manager.local",
+      "strict_min_version": "115.0"
+    }
+  }
+}
