@@ -1,35 +1,42 @@
+
 name: Build NOVA for Windows
 
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  build-windows:
-    runs-on: windows-2022
+
+  build:
+    name: Build Windows x64 Installer
+    runs-on: windows-latest
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
 
-      - name: Set up Rust
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Cache Rust build
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
+jobs:
+  build-windows:
+    name: Build Windows x64 Installer
+    runs-on: windows-latest
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -59,5 +66,6 @@ jobs:
         with:
           name: NOVA-Windows-x64-release
           path: release-artifacts/*
+
           if-no-files-found: error
           retention-days: 14
