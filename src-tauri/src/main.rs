@@ -292,6 +292,7 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>) {
                                         sha256_calculated: None,
                                         segments_count: 8,
                                         priority: "normal".to_string(),
+                                        error_message: None,
                                     };
 
                                     // 1. Durably insert to SQLite database

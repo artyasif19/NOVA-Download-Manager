@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use futures_util::StreamExt;
 use parking_lot::RwLock;
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
+use reqwest::header::{HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
@@ -284,46 +284,71 @@ impl DownloadEngine {
 
     /// Real FTP & FTPS server inspection
     async fn probe_ftp(&self, url: &str, is_ftps: bool) -> Result<ProbeInfo, String> {
-        let parsed = url::Url::parse(url).map_err(|e| format!("Invalid FTP URL: {}", e))?;
-        let host = parsed.host_str().ok_or_else(|| "Missing host in FTP URL".to_string())?;
+        let parsed = url::Url::parse(url)
+            .map_err(|e| format!("Invalid FTP URL: {}", e))?;
+        let host = parsed.host_str()
+            .ok_or_else(|| "Missing host in FTP URL".to_string())?;
         let port = parsed.port().unwrap_or(21);
         let user = parsed.username();
         let pass = parsed.password().unwrap_or("");
         let path = parsed.path().trim_start_matches('/');
 
-        let mut stream = suppaftp::AsyncFtpStream::connect((host, port))
-            .await
-            .map_err(|e| format!("FTP connection refused for {}:{}: {}", host, port, e))?;
+        let auth_user = if user.is_empty() { "anonymous" } else { user };
+        let auth_pass = if user.is_empty() { "anonymous@nova" } else { pass };
 
-        if is_ftps {
+        let (total_bytes, is_resumable) = if is_ftps {
             let connector = suppaftp::AsyncNativeTlsConnector::from(
                 suppaftp::async_native_tls::TlsConnector::new()
             );
-            stream = stream.into_secure(connector, host)
+
+            let stream = suppaftp::AsyncNativeTlsFtpStream::connect((host, port))
+                .await
+                .map_err(|e| format!("FTPS connection failed for {}:{}: {}", host, port, e))?;
+
+            let mut stream = stream.into_secure(connector, host)
                 .await
                 .map_err(|e| format!("FTPS TLS upgrade failed for {}:{}: {}", host, port, e))?;
-        }
 
-        let auth_user = if user.is_empty() { "anonymous" } else { user };
-        let auth_pass = if user.is_empty() { "anonymous@nova" } else { pass };
-        
-        stream.login(auth_user, auth_pass)
-            .await
-            .map_err(|e| format!("FTP authentication failed for user '{}' on {}: {}", auth_user, host, e))?;
+            stream.login(auth_user, auth_pass)
+                .await
+                .map_err(|e| format!("FTPS authentication failed for {}: {}", host, e))?;
 
-        stream.transfer_type(suppaftp::types::FileType::Binary)
-            .await
-            .map_err(|e| format!("Failed to set FTP binary transfer mode: {}", e))?;
+            stream.transfer_type(suppaftp::types::FileType::Binary)
+                .await
+                .map_err(|e| format!("FTPS binary mode failed: {}", e))?;
 
-        // Query real file size without estimation
-        let total_bytes = match stream.size(path).await {
-            Ok(sz) => sz as u64,
-            Err(_) => 0u64, // Real size could not be retrieved from server; reported as unknown (0)
+            let total_bytes = match stream.size(path).await {
+                Ok(sz) => sz as u64,
+                Err(_) => 0u64,
+            };
+
+            let is_resumable = stream.resume_transfer(0).await.is_ok();
+            let _ = stream.quit().await;
+
+            (total_bytes, is_resumable)
+        } else {
+            let mut stream = suppaftp::AsyncFtpStream::connect((host, port))
+                .await
+                .map_err(|e| format!("FTP connection failed for {}:{}: {}", host, port, e))?;
+
+            stream.login(auth_user, auth_pass)
+                .await
+                .map_err(|e| format!("FTP authentication failed for {}: {}", host, e))?;
+
+            stream.transfer_type(suppaftp::types::FileType::Binary)
+                .await
+                .map_err(|e| format!("FTP binary mode failed: {}", e))?;
+
+            let total_bytes = match stream.size(path).await {
+                Ok(sz) => sz as u64,
+                Err(_) => 0u64,
+            };
+
+            let is_resumable = stream.resume_transfer(0).await.is_ok();
+            let _ = stream.quit().await;
+
+            (total_bytes, is_resumable)
         };
-
-        // Query restart capability (REST command)
-        let is_resumable = stream.restart(0).await.is_ok();
-        let _ = stream.quit().await;
 
         let filename = extract_filename_from_url(url);
 
@@ -382,10 +407,11 @@ impl DownloadEngine {
         })
     }
 
-    /// Dedicated FTP / FTPS transfer using real suppaftp client in binary passive mode with offset resume
+    
+    /// Dedicated FTP / FTPS transfer using separate connection types.
     async fn download_ftp(
         req: DownloadRequest,
-        mut cancel_rx: broadcast::Receiver<()>,
+        cancel_rx: broadcast::Receiver<()>,
         db: Arc<Database>,
         target_path: PathBuf,
         is_ftps: bool,
@@ -418,197 +444,272 @@ impl DownloadEngine {
         let port = parsed.port().unwrap_or(21);
         let user = req.username.as_deref().unwrap_or_else(|| parsed.username());
         let pass = req.password.as_deref().unwrap_or_else(|| parsed.password().unwrap_or(""));
-        let path = parsed.path().trim_start_matches('/');
+        let path = parsed.path().trim_start_matches('/').to_string();
 
         let auth_user = if user.is_empty() { "anonymous" } else { user };
         let auth_pass = if user.is_empty() { "anonymous@nova" } else { pass };
 
-        let mut stream = match suppaftp::AsyncFtpStream::connect((host, port)).await {
-            Ok(s) => s,
-            Err(e) => {
-                let err_msg = format!("FTP connection to {}:{} failed: {}", host, port, e);
+
+        let mut cancel_rx = cancel_rx;
+        let auth_user: &str = auth_user;
+        let auth_pass: &str = auth_pass;
+
+        // Shared FTP / FTPS transfer logic. A macro (instead of a generic fn) avoids
+        // naming suppaftp's internal TLS-stream trait bounds, which differ between versions.
+        macro_rules! ftp_transfer {
+            ($stream:ident) => {{
+            if let Err(e) = $stream.login(auth_user, auth_pass).await {
+                let err_msg = format!("FTP authentication failed for user '{}': {}", auth_user, e);
                 let _ = db.save_download_error(&dl_id, &err_msg);
                 emit_error_handle(&app_handle, &dl_id, &err_msg);
                 return;
             }
-        };
+
+            if let Err(e) = $stream.transfer_type(suppaftp::types::FileType::Binary).await {
+                let err_msg = format!("FTP binary mode selection failed: {}", e);
+                let _ = db.save_download_error(&dl_id, &err_msg);
+                emit_error_handle(&app_handle, &dl_id, &err_msg);
+                let _ = $stream.quit().await;
+                return;
+            }
+
+            // Resume from the existing local file when possible.
+            let mut start_offset = 0u64;
+
+            if let Ok(metadata) = std::fs::metadata(&target_path) {
+                if metadata.len() > 0
+                    && (expected_total_bytes == 0 || metadata.len() < expected_total_bytes)
+                {
+                    start_offset = metadata.len();
+                }
+            }
+
+            if start_offset > 0 {
+                if $stream.resume_transfer(start_offset as usize).await.is_err() {
+                    start_offset = 0;
+                }
+            }
+
+            let mut file = match OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(&target_path)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    let err_msg = format!("Local file open failed: {}", e);
+                    let _ = db.save_download_error(&dl_id, &err_msg);
+                    emit_error_handle(&app_handle, &dl_id, &err_msg);
+                    let _ = $stream.quit().await;
+                    return;
+                }
+            };
+
+            if start_offset > 0 {
+                if let Err(e) = file.seek(SeekFrom::Start(start_offset)) {
+                    let err_msg = format!("Local file seek failed: {}", e);
+                    let _ = db.save_download_error(&dl_id, &err_msg);
+                    emit_error_handle(&app_handle, &dl_id, &err_msg);
+                    let _ = $stream.quit().await;
+                    return;
+                }
+            } else if let Err(e) = file.set_len(0) {
+                let err_msg = format!("Could not reset destination file: {}", e);
+                let _ = db.save_download_error(&dl_id, &err_msg);
+                emit_error_handle(&app_handle, &dl_id, &err_msg);
+                let _ = $stream.quit().await;
+                return;
+            }
+
+            let mut data_stream = match $stream.retr_as_stream(&path).await {
+                Ok(ds) => ds,
+                Err(e) => {
+                    let err_msg = format!("FTP RETR stream failed for '{}': {}", path, e);
+                    let _ = db.save_download_error(&dl_id, &err_msg);
+                    emit_error_handle(&app_handle, &dl_id, &err_msg);
+                    let _ = $stream.quit().await;
+                    return;
+                }
+            };
+
+            use tokio::io::AsyncReadExt;
+
+            let mut buffer = [0u8; 65536];
+            let mut downloaded = start_offset;
+            let mut last_save = downloaded;
+            let mut last_emit_bytes = downloaded;
+            let mut last_emit_time = tokio::time::Instant::now();
+            let mut interrupted = false;
+
+            loop {
+                if cancel_rx.try_recv().is_ok() {
+                    interrupted = true;
+                    let _ = db.update_download_status(&dl_id, "paused");
+                    emit_status_handle(&app_handle, &dl_id, "paused");
+                    break;
+                }
+
+                match data_stream.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Err(e) = file.write_all(&buffer[..n]) {
+                            interrupted = true;
+                            let err_msg = format!("File write error: {}", e);
+                            let _ = db.save_download_error(&dl_id, &err_msg);
+                            emit_error_handle(&app_handle, &dl_id, &err_msg);
+                            break;
+                        }
+
+                        downloaded += n as u64;
+
+                        if downloaded.saturating_sub(last_save) >= 262144 {
+                            last_save = downloaded;
+                            let _ = db.save_download_checkpoint(&dl_id, downloaded, "downloading");
+                        }
+
+                        if last_emit_time.elapsed().as_millis() >= 250 {
+                            let elapsed_sec = last_emit_time.elapsed().as_secs_f64().max(0.001);
+                            let speed =
+                                ((downloaded.saturating_sub(last_emit_bytes)) as f64 / elapsed_sec)
+                                    as u64;
+
+                            last_emit_bytes = downloaded;
+                            last_emit_time = tokio::time::Instant::now();
+
+                            emit_progress_handle(&app_handle, &DownloadProgressPayload {
+                                id: dl_id.clone(),
+                                downloaded_bytes: downloaded,
+                                total_bytes: expected_total_bytes,
+                                speed_bytes_sec: speed,
+                                segments: vec![SegmentProgress {
+                                    id: 0,
+                                    start_byte: 0,
+                                    end_byte: expected_total_bytes.saturating_sub(1),
+                                    downloaded_bytes: downloaded,
+                                    speed_bytes_sec: speed,
+                                    is_finished: false,
+                                }],
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        interrupted = true;
+                        let err_msg = format!("FTP data stream read error: {}", e);
+                        let _ = db.save_download_error(&dl_id, &err_msg);
+                        emit_error_handle(&app_handle, &dl_id, &err_msg);
+                        break;
+                    }
+                }
+            }
+
+            // Finish the data transfer before quitting the FTP session.
+            if let Err(e) = $stream.finalize_retr_stream(data_stream).await {
+                if !interrupted {
+                    interrupted = true;
+                    let err_msg = format!("FTP transfer finalization failed: {}", e);
+                    let _ = db.save_download_error(&dl_id, &err_msg);
+                    emit_error_handle(&app_handle, &dl_id, &err_msg);
+                }
+            }
+
+            let _ = file.flush();
+            drop(file);
+            let _ = $stream.quit().await;
+
+            if !interrupted {
+                if expected_total_bytes > 0 && downloaded < expected_total_bytes {
+                    let err_msg = format!(
+                        "Premature end of FTP stream (downloaded {} of {} bytes)",
+                        downloaded,
+                        expected_total_bytes
+                    );
+                    let _ = db.save_download_error(&dl_id, &err_msg);
+                    emit_error_handle(&app_handle, &dl_id, &err_msg);
+                    return;
+                }
+
+                let mut sha_ok = true;
+
+                if let Some(ref expected) = expected_sha256 {
+                    if let Ok(mut f) = std::fs::File::open(&target_path) {
+                        let mut hasher = Sha256::new();
+                        let mut buf = vec![0u8; 65536];
+
+                        while let Ok(n) = f.read(&mut buf) {
+                            if n == 0 {
+                                break;
+                            }
+                            hasher.update(&buf[..n]);
+                        }
+
+                        let calculated = format!("{:x}", hasher.finalize());
+
+                        if !calculated.eq_ignore_ascii_case(expected) {
+                            sha_ok = false;
+                            let err_msg = format!(
+                                "SHA-256 verification failed (expected {}, calculated {})",
+                                expected,
+                                calculated
+                            );
+                            let _ = db.save_download_error(&dl_id, &err_msg);
+                            emit_error_handle(&app_handle, &dl_id, &err_msg);
+                            return;
+                        }
+                    }
+                }
+
+                let _ = db.save_download_checkpoint(&dl_id, downloaded, "completed");
+
+                emit_completed_handle(&app_handle, &DownloadCompletedPayload {
+                    id: dl_id.clone(),
+                    destination_path: target_path.to_string_lossy().to_string(),
+                    total_bytes: downloaded,
+                    sha256_verified: sha_ok,
+                });
+
+                emit_status_handle(&app_handle, &dl_id, "completed");
+            }
+            }};
+        }
 
         if is_ftps {
             let connector = suppaftp::AsyncNativeTlsConnector::from(
                 suppaftp::async_native_tls::TlsConnector::new()
             );
-            match stream.into_secure(connector, host).await {
-                Ok(sec) => stream = sec,
+
+            let stream = match suppaftp::AsyncNativeTlsFtpStream::connect((host, port)).await {
+                Ok(s) => s,
+                Err(e) => {
+                    let err_msg = format!("FTPS connection to {}:{} failed: {}", host, port, e);
+                    let _ = db.save_download_error(&dl_id, &err_msg);
+                    emit_error_handle(&app_handle, &dl_id, &err_msg);
+                    return;
+                }
+            };
+
+            let mut secure_stream = match stream.into_secure(connector, host).await {
+                Ok(s) => s,
                 Err(e) => {
                     let err_msg = format!("FTPS TLS negotiation failed: {}", e);
                     let _ = db.save_download_error(&dl_id, &err_msg);
                     emit_error_handle(&app_handle, &dl_id, &err_msg);
                     return;
                 }
-            }
-        }
+            };
 
-        if let Err(e) = stream.login(auth_user, auth_pass).await {
-            let err_msg = format!("FTP authentication failed for user '{}': {}", auth_user, e);
-            let _ = db.save_download_error(&dl_id, &err_msg);
-            emit_error_handle(&app_handle, &dl_id, &err_msg);
-            return;
-        }
-
-        if let Err(e) = stream.transfer_type(suppaftp::types::FileType::Binary).await {
-            let err_msg = format!("FTP binary mode selection failed: {}", e);
-            let _ = db.save_download_error(&dl_id, &err_msg);
-            emit_error_handle(&app_handle, &dl_id, &err_msg);
-            return;
-        }
-
-        // Offset-based resume support
-        let mut start_offset = 0u64;
-        if let Ok(metadata) = std::fs::metadata(&target_path) {
-            if metadata.len() > 0 && (expected_total_bytes == 0 || metadata.len() < expected_total_bytes) {
-                start_offset = metadata.len();
-            }
-        }
-
-        if start_offset > 0 {
-            if let Err(_) = stream.restart(start_offset as usize).await {
-                start_offset = 0;
-            }
-        }
-
-        let mut file = match OpenOptions::new()
-            .write(true)
-            .create(true)
-            .open(&target_path)
-        {
-            Ok(f) => f,
-            Err(e) => {
-                let err_msg = format!("Local file open failed: {}", e);
-                let _ = db.save_download_error(&dl_id, &err_msg);
-                emit_error_handle(&app_handle, &dl_id, &err_msg);
-                return;
-            }
-        };
-
-        if start_offset > 0 {
-            let _ = file.seek(SeekFrom::Start(start_offset));
-        }
-
-        let mut data_stream = match stream.retr_as_stream(path).await {
-            Ok(ds) => ds,
-            Err(e) => {
-                let err_msg = format!("FTP RETR stream failed for '{}': {}", path, e);
-                let _ = db.save_download_error(&dl_id, &err_msg);
-                emit_error_handle(&app_handle, &dl_id, &err_msg);
-                return;
-            }
-        };
-
-        use tokio::io::AsyncReadExt;
-        let mut buffer = [0u8; 65536];
-        let mut downloaded = start_offset;
-        let mut last_save = downloaded;
-        let mut last_emit_bytes = downloaded;
-        let mut last_emit_time = tokio::time::Instant::now();
-        let mut interrupted = false;
-
-        loop {
-            if cancel_rx.try_recv().is_ok() {
-                interrupted = true;
-                let _ = db.update_download_status(&dl_id, "paused");
-                emit_status_handle(&app_handle, &dl_id, "paused");
-                break;
-            }
-
-            match data_stream.read(&mut buffer).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    if let Err(e) = file.write_all(&buffer[..n]) {
-                        interrupted = true;
-                        let err_msg = format!("File write error: {}", e);
-                        let _ = db.save_download_error(&dl_id, &err_msg);
-                        emit_error_handle(&app_handle, &dl_id, &err_msg);
-                        break;
-                    }
-                    downloaded += n as u64;
-
-                    if downloaded.saturating_sub(last_save) >= 262144 {
-                        last_save = downloaded;
-                        let _ = db.save_download_checkpoint(&dl_id, downloaded, "downloading");
-                    }
-
-                    if last_emit_time.elapsed().as_millis() >= 250 {
-                        let elapsed_sec = last_emit_time.elapsed().as_secs_f64().max(0.001);
-                        let speed = ((downloaded.saturating_sub(last_emit_bytes)) as f64 / elapsed_sec) as u64;
-                        last_emit_bytes = downloaded;
-                        last_emit_time = tokio::time::Instant::now();
-
-                        emit_progress_handle(&app_handle, &DownloadProgressPayload {
-                            id: dl_id.clone(),
-                            downloaded_bytes: downloaded,
-                            total_bytes: expected_total_bytes,
-                            speed_bytes_sec: speed,
-                            segments: vec![SegmentProgress {
-                                id: 0,
-                                start_byte: 0,
-                                end_byte: expected_total_bytes.saturating_sub(1),
-                                downloaded_bytes: downloaded,
-                                speed_bytes_sec: speed,
-                                is_finished: false,
-                            }],
-                        });
-                    }
-                }
+            ftp_transfer!(secure_stream);
+        } else {
+            let mut plain_stream = match suppaftp::AsyncFtpStream::connect((host, port)).await {
+                Ok(s) => s,
                 Err(e) => {
-                    interrupted = true;
-                    let err_msg = format!("FTP data stream read error: {}", e);
+                    let err_msg = format!("FTP connection to {}:{} failed: {}", host, port, e);
                     let _ = db.save_download_error(&dl_id, &err_msg);
                     emit_error_handle(&app_handle, &dl_id, &err_msg);
-                    break;
+                    return;
                 }
-            }
-        }
+            };
 
-        let _ = file.flush();
-        drop(file);
-        let _ = stream.quit().await;
-
-        if !interrupted {
-            if expected_total_bytes > 0 && downloaded < expected_total_bytes {
-                let err_msg = format!("Premature end of FTP stream (downloaded {} of {} bytes)", downloaded, expected_total_bytes);
-                let _ = db.save_download_error(&dl_id, &err_msg);
-                emit_error_handle(&app_handle, &dl_id, &err_msg);
-                return;
-            }
-
-            let mut sha_ok = true;
-            if let Some(ref expected) = expected_sha256 {
-                if let Ok(mut f) = std::fs::File::open(&target_path) {
-                    let mut hasher = Sha256::new();
-                    let mut buf = vec![0u8; 65536];
-                    while let Ok(n) = f.read(&mut buf) {
-                        if n == 0 { break; }
-                        hasher.update(&buf[..n]);
-                    }
-                    let calculated = format!("{:x}", hasher.finalize());
-                    if !calculated.eq_ignore_ascii_case(expected) {
-                        sha_ok = false;
-                        let err_msg = format!("SHA-256 verification failed (expected {}, calculated {})", expected, calculated);
-                        let _ = db.save_download_error(&dl_id, &err_msg);
-                        emit_error_handle(&app_handle, &dl_id, &err_msg);
-                        return;
-                    }
-                }
-            }
-
-            let _ = db.save_download_checkpoint(&dl_id, downloaded, "completed");
-            emit_completed_handle(&app_handle, &DownloadCompletedPayload {
-                id: dl_id.clone(),
-                destination_path: target_path.to_string_lossy().to_string(),
-                total_bytes: downloaded,
-                sha256_verified: sha_ok,
-            });
-            emit_status_handle(&app_handle, &dl_id, "completed");
+            ftp_transfer!(plain_stream);
         }
     }
 
@@ -1467,4 +1568,59 @@ pub async fn verify_checksum(path: &str, expected_hash: &str) -> Result<bool, St
     let result = hasher.finalize();
     let calculated = hex::encode(result);
     Ok(calculated.eq_ignore_ascii_case(expected_hash))
+}
+// Missing event helper functions used by FTP and SFTP downloads.
+
+fn emit_error_handle(
+    app_handle: &Arc<RwLock<Option<tauri::AppHandle>>>,
+    id: &str,
+    error: &str,
+) {
+    use tauri::Emitter;
+
+    if let Some(handle) = app_handle.read().as_ref() {
+        let payload = DownloadErrorPayload {
+            id: id.to_string(),
+            error: error.to_string(),
+        };
+        let _ = handle.emit("download-error", payload);
+    }
+}
+
+fn emit_status_handle(
+    app_handle: &Arc<RwLock<Option<tauri::AppHandle>>>,
+    id: &str,
+    status: &str,
+) {
+    use tauri::Emitter;
+
+    if let Some(handle) = app_handle.read().as_ref() {
+        let payload = DownloadStatusPayload {
+            id: id.to_string(),
+            status: status.to_string(),
+        };
+        let _ = handle.emit("download-status-changed", payload);
+    }
+}
+
+fn emit_progress_handle(
+    app_handle: &Arc<RwLock<Option<tauri::AppHandle>>>,
+    payload: &DownloadProgressPayload,
+) {
+    use tauri::Emitter;
+
+    if let Some(handle) = app_handle.read().as_ref() {
+        let _ = handle.emit("download-progress", payload);
+    }
+}
+
+fn emit_completed_handle(
+    app_handle: &Arc<RwLock<Option<tauri::AppHandle>>>,
+    payload: &DownloadCompletedPayload,
+) {
+    use tauri::Emitter;
+
+    if let Some(handle) = app_handle.read().as_ref() {
+        let _ = handle.emit("download-completed", payload);
+    }
 }
