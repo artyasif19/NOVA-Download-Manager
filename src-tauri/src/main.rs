@@ -345,8 +345,7 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>) {
                                         }
                                     }
                                 }
-                                }
-                            } else {
+                             } else {
                                 (false, serde_json::json!({
                                     "status": "rejected",
                                     "accepted": false,
