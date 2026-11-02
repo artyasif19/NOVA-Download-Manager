@@ -177,7 +177,11 @@ impl DownloadEngine {
 
         // 1. Handle FTP and FTPS protocols with real client probe
         if protocol == "ftp" || protocol == "ftps" {
-            return self.probe_ftp(clean, protocol == "ftps").await;
+            let clean_str = clean.to_string();
+            let is_ftps = protocol == "ftps";
+            return tokio::task::spawn_blocking(move || Self::probe_ftp(&clean_str, is_ftps))
+                .await
+                .map_err(|e| format!("FTP probe task error: {}", e))?;
         }
 
         // 2. Handle SFTP protocol with real SSH/SFTP probe
@@ -283,7 +287,7 @@ impl DownloadEngine {
     }
 
     /// Real FTP & FTPS server inspection
-    async fn probe_ftp(&self, url: &str, is_ftps: bool) -> Result<ProbeInfo, String> {
+    fn probe_ftp(url: &str, is_ftps: bool) -> Result<ProbeInfo, String> {
         let parsed = url::Url::parse(url)
             .map_err(|e| format!("Invalid FTP URL: {}", e))?;
         let host = parsed.host_str()
@@ -297,55 +301,49 @@ impl DownloadEngine {
         let auth_pass = if user.is_empty() { "anonymous@nova" } else { pass };
 
         let (total_bytes, is_resumable) = if is_ftps {
-            let connector = suppaftp::AsyncNativeTlsConnector::from(
-                suppaftp::async_native_tls::TlsConnector::new()
+            let connector = suppaftp::NativeTlsConnector::from(
+                suppaftp::native_tls::TlsConnector::new()
+                    .map_err(|e| format!("TLS init failed: {}", e))?
             );
 
-            let stream = suppaftp::AsyncNativeTlsFtpStream::connect((host, port))
-                .await
+            let stream = suppaftp::NativeTlsFtpStream::connect((host, port))
                 .map_err(|e| format!("FTPS connection failed for {}:{}: {}", host, port, e))?;
 
             let mut stream = stream.into_secure(connector, host)
-                .await
                 .map_err(|e| format!("FTPS TLS upgrade failed for {}:{}: {}", host, port, e))?;
 
             stream.login(auth_user, auth_pass)
-                .await
                 .map_err(|e| format!("FTPS authentication failed for {}: {}", host, e))?;
 
             stream.transfer_type(suppaftp::types::FileType::Binary)
-                .await
                 .map_err(|e| format!("FTPS binary mode failed: {}", e))?;
 
-            let total_bytes = match stream.size(path).await {
+            let total_bytes = match stream.size(path) {
                 Ok(sz) => sz as u64,
                 Err(_) => 0u64,
             };
 
-            let is_resumable = stream.resume_transfer(0).await.is_ok();
-            let _ = stream.quit().await;
+            let is_resumable = stream.resume_transfer(0).is_ok();
+            let _ = stream.quit();
 
             (total_bytes, is_resumable)
         } else {
-            let mut stream = suppaftp::AsyncFtpStream::connect((host, port))
-                .await
+            let mut stream = suppaftp::FtpStream::connect((host, port))
                 .map_err(|e| format!("FTP connection failed for {}:{}: {}", host, port, e))?;
 
             stream.login(auth_user, auth_pass)
-                .await
                 .map_err(|e| format!("FTP authentication failed for {}: {}", host, e))?;
 
             stream.transfer_type(suppaftp::types::FileType::Binary)
-                .await
                 .map_err(|e| format!("FTP binary mode failed: {}", e))?;
 
-            let total_bytes = match stream.size(path).await {
+            let total_bytes = match stream.size(path) {
                 Ok(sz) => sz as u64,
                 Err(_) => 0u64,
             };
 
-            let is_resumable = stream.resume_transfer(0).await.is_ok();
-            let _ = stream.quit().await;
+            let is_resumable = stream.resume_transfer(0).is_ok();
+            let _ = stream.quit();
 
             (total_bytes, is_resumable)
         };
@@ -409,7 +407,7 @@ impl DownloadEngine {
 
     
     /// Dedicated FTP / FTPS transfer using separate connection types.
-    async fn download_ftp(
+    fn download_ftp(
         req: DownloadRequest,
         cancel_rx: broadcast::Receiver<()>,
         db: Arc<Database>,
@@ -458,18 +456,18 @@ impl DownloadEngine {
         // naming suppaftp's internal TLS-stream trait bounds, which differ between versions.
         macro_rules! ftp_transfer {
             ($stream:ident) => {{
-            if let Err(e) = $stream.login(auth_user, auth_pass).await {
+            if let Err(e) = $stream.login(auth_user, auth_pass) {
                 let err_msg = format!("FTP authentication failed for user '{}': {}", auth_user, e);
                 let _ = db.save_download_error(&dl_id, &err_msg);
                 emit_error_handle(&app_handle, &dl_id, &err_msg);
                 return;
             }
 
-            if let Err(e) = $stream.transfer_type(suppaftp::types::FileType::Binary).await {
+            if let Err(e) = $stream.transfer_type(suppaftp::types::FileType::Binary) {
                 let err_msg = format!("FTP binary mode selection failed: {}", e);
                 let _ = db.save_download_error(&dl_id, &err_msg);
                 emit_error_handle(&app_handle, &dl_id, &err_msg);
-                let _ = $stream.quit().await;
+                let _ = $stream.quit();
                 return;
             }
 
@@ -485,7 +483,7 @@ impl DownloadEngine {
             }
 
             if start_offset > 0 {
-                if $stream.resume_transfer(start_offset as usize).await.is_err() {
+                if $stream.resume_transfer(start_offset as usize).is_err() {
                     start_offset = 0;
                 }
             }
@@ -500,7 +498,7 @@ impl DownloadEngine {
                     let err_msg = format!("Local file open failed: {}", e);
                     let _ = db.save_download_error(&dl_id, &err_msg);
                     emit_error_handle(&app_handle, &dl_id, &err_msg);
-                    let _ = $stream.quit().await;
+                    let _ = $stream.quit();
                     return;
                 }
             };
@@ -510,31 +508,29 @@ impl DownloadEngine {
                     let err_msg = format!("Local file seek failed: {}", e);
                     let _ = db.save_download_error(&dl_id, &err_msg);
                     emit_error_handle(&app_handle, &dl_id, &err_msg);
-                    let _ = $stream.quit().await;
+                    let _ = $stream.quit();
                     return;
                 }
             } else if let Err(e) = file.set_len(0) {
                 let err_msg = format!("Could not reset destination file: {}", e);
                 let _ = db.save_download_error(&dl_id, &err_msg);
                 emit_error_handle(&app_handle, &dl_id, &err_msg);
-                let _ = $stream.quit().await;
+                let _ = $stream.quit();
                 return;
             }
 
-            let mut data_stream = match $stream.retr_as_stream(&path).await {
+            let mut data_stream = match $stream.retr_as_stream(&path) {
                 Ok(ds) => ds,
                 Err(e) => {
                     let err_msg = format!("FTP RETR stream failed for '{}': {}", path, e);
                     let _ = db.save_download_error(&dl_id, &err_msg);
                     emit_error_handle(&app_handle, &dl_id, &err_msg);
-                    let _ = $stream.quit().await;
+                    let _ = $stream.quit();
                     return;
                 }
             };
 
-            use tokio::io::AsyncReadExt;
-
-            let mut buffer = [0u8; 65536];
+                        let mut buffer = [0u8; 65536];
             let mut downloaded = start_offset;
             let mut last_save = downloaded;
             let mut last_emit_bytes = downloaded;
@@ -549,7 +545,7 @@ impl DownloadEngine {
                     break;
                 }
 
-                match data_stream.read(&mut buffer).await {
+                match data_stream.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
                         if let Err(e) = file.write_all(&buffer[..n]) {
@@ -603,7 +599,7 @@ impl DownloadEngine {
             }
 
             // Finish the data transfer before quitting the FTP session.
-            if let Err(e) = $stream.finalize_retr_stream(data_stream).await {
+            if let Err(e) = $stream.finalize_retr_stream(data_stream) {
                 if !interrupted {
                     interrupted = true;
                     let err_msg = format!("FTP transfer finalization failed: {}", e);
@@ -614,7 +610,7 @@ impl DownloadEngine {
 
             let _ = file.flush();
             drop(file);
-            let _ = $stream.quit().await;
+            let _ = $stream.quit();
 
             if !interrupted {
                 if expected_total_bytes > 0 && downloaded < expected_total_bytes {
@@ -673,11 +669,17 @@ impl DownloadEngine {
         }
 
         if is_ftps {
-            let connector = suppaftp::AsyncNativeTlsConnector::from(
-                suppaftp::async_native_tls::TlsConnector::new()
-            );
+            let connector = match suppaftp::native_tls::TlsConnector::new() {
+                Ok(c) => suppaftp::NativeTlsConnector::from(c),
+                Err(e) => {
+                    let err_msg = format!("TLS init failed: {}", e);
+                    let _ = db.save_download_error(&dl_id, &err_msg);
+                    emit_error_handle(&app_handle, &dl_id, &err_msg);
+                    return;
+                }
+            };
 
-            let stream = match suppaftp::AsyncNativeTlsFtpStream::connect((host, port)).await {
+            let stream = match suppaftp::NativeTlsFtpStream::connect((host, port)) {
                 Ok(s) => s,
                 Err(e) => {
                     let err_msg = format!("FTPS connection to {}:{} failed: {}", host, port, e);
@@ -687,7 +689,7 @@ impl DownloadEngine {
                 }
             };
 
-            let mut secure_stream = match stream.into_secure(connector, host).await {
+            let mut secure_stream = match stream.into_secure(connector, host) {
                 Ok(s) => s,
                 Err(e) => {
                     let err_msg = format!("FTPS TLS negotiation failed: {}", e);
@@ -699,7 +701,7 @@ impl DownloadEngine {
 
             ftp_transfer!(secure_stream);
         } else {
-            let mut plain_stream = match suppaftp::AsyncFtpStream::connect((host, port)).await {
+            let mut plain_stream = match suppaftp::FtpStream::connect((host, port)) {
                 Ok(s) => s,
                 Err(e) => {
                     let err_msg = format!("FTP connection to {}:{} failed: {}", host, port, e);
@@ -983,8 +985,8 @@ impl DownloadEngine {
             let target_path_clone = target_path.clone();
             let db_clone = Arc::clone(&self.db);
             let app_handle_clone = Arc::clone(&self.app_handle);
-            tokio::spawn(async move {
-                Self::download_ftp(req, cancel_rx, db_clone, target_path_clone, is_ftps, app_handle_clone).await;
+            tokio::task::spawn_blocking(move || {
+                Self::download_ftp(req, cancel_rx, db_clone, target_path_clone, is_ftps, app_handle_clone);
             });
             return Ok(());
         }
