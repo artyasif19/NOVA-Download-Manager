@@ -207,7 +207,7 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>) {
     }
 
     let token_clone = auth_token.clone();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         use tokio::net::TcpListener;
         use tokio::io::AsyncWriteExt;
 
@@ -462,7 +462,7 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>) {
 
 /// Persistent Queue Worker: monitors SQLite for queued downloads and resumes them
 fn start_persistent_queue_worker(engine: Arc<DownloadEngine>, db: Arc<Database>) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             if let Ok(active) = db.get_active_downloads_count() {
@@ -494,6 +494,16 @@ fn start_persistent_queue_worker(engine: Arc<DownloadEngine>, db: Arc<Database>)
 }
 
 fn main() {
+    // Write panics to %LOCALAPPDATA%\NOVA\crash.log (release builds have no console).
+    std::panic::set_hook(Box::new(|info| {
+        let dir = std::env::var("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join("NOVA");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("crash.log"), format!("{}\n", info));
+    }));
+
     let db = Arc::new(Database::init().expect("Failed to initialize SQLite database"));
     let engine = Arc::new(DownloadEngine::new(Arc::clone(&db)));
 
