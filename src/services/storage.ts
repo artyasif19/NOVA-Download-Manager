@@ -225,21 +225,18 @@ export const INITIAL_DOWNLOADS: DownloadItem[] = [
   },
 ];
 
-const STORAGE_KEY_DOWNLOADS = 'nova_downloads_v2';
+const STORAGE_KEY_DOWNLOADS = 'nova_downloads_v3';
 const STORAGE_KEY_SETTINGS = 'nova_settings_v2';
 const STORAGE_KEY_CUSTOM_CATS = 'nova_custom_categories_v2';
 
 export function loadStoredDownloads(): DownloadItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_DOWNLOADS);
-    if (!raw) {
-      saveStoredDownloads(INITIAL_DOWNLOADS);
-      return INITIAL_DOWNLOADS;
-    }
+    if (!raw) return [];
     return JSON.parse(raw);
   } catch (e) {
-    console.error('Failed to load downloads from storage, fallback to defaults', e);
-    return INITIAL_DOWNLOADS;
+    console.error('Failed to load downloads from storage', e);
+    return [];
   }
 }
 

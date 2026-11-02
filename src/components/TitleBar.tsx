@@ -17,6 +17,20 @@ import {
 } from 'lucide-react';
 import { formatSpeed } from '../utils/formatters';
 import { AppSettings } from '../types/download';
+import { isTauriEnvironment } from '../services/tauriBridge';
+
+async function windowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
+  if (!isTauriEnvironment()) return;
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const win = getCurrentWindow();
+    if (action === 'minimize') await win.minimize();
+    else if (action === 'toggleMaximize') await win.toggleMaximize();
+    else await win.close();
+  } catch (err) {
+    console.error('Window control failed:', err);
+  }
+}
 
 interface TitleBarProps {
   totalSpeed: number;
@@ -45,7 +59,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onOpenAbout,
 }) => {
   return (
-    <header className="h-10 bg-[#0c0e12] border-b border-white/[0.07] flex items-center justify-between px-3 select-none shrink-0 z-50">
+    <header data-tauri-drag-region className="h-10 bg-[#0c0e12] border-b border-white/[0.07] flex items-center justify-between px-3 select-none shrink-0 z-50">
       {/* App Branding & Window Identifier */}
       <div className="flex items-center gap-2.5 min-w-[240px]">
         <div className={`w-6 h-6 rounded-md ${accentClasses.bg} flex items-center justify-center shadow-sm shadow-black/40`}>
@@ -116,18 +130,21 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <div className="flex items-center ml-2 border-l border-white/[0.08] pl-2 -mr-1">
           <button
             title="Minimize"
+            onClick={() => windowAction('minimize')}
             className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-white/[0.06] rounded transition-colors"
           >
             <Minus className="w-3 h-3" />
           </button>
           <button
             title="Maximize"
+            onClick={() => windowAction('toggleMaximize')}
             className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-white/[0.06] rounded transition-colors"
           >
             <Square className="w-2.5 h-2.5" />
           </button>
           <button
-            title="Close to Tray"
+            title="Close"
+            onClick={() => windowAction('close')}
             className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white hover:bg-rose-600 rounded transition-colors"
           >
             <X className="w-3.5 h-3.5" />

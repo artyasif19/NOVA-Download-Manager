@@ -1,0 +1,17 @@
+{
+  "identifier": "default",
+  "description": "Permissions for the NOVA main window (window controls, folder picker, paths)",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "dialog:default",
+    "dialog:allow-open"
+  ]
+}

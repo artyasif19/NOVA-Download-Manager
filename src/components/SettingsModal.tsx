@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { isTauriEnvironment, pickFolder } from '../services/tauriBridge';
 import React, { useState } from 'react';
 import { 
   X, 
@@ -232,6 +233,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onChange={(e) => onUpdateSettings({ defaultFolder: e.target.value })}
                       className="flex-1 bg-[#0c0f15] border border-white/[0.1] rounded px-3 py-1.5 font-mono text-slate-200 text-xs"
                     />
+                    {isTauriEnvironment() && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const picked = await pickFolder('Select default download folder');
+                          if (picked) onUpdateSettings({ defaultFolder: picked });
+                        }}
+                        className="px-3 py-1.5 text-xs rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-200"
+                      >
+                        Browse…
+                      </button>
+                    )}
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1">
                     Files will be organized into Video, Documents, Compressed, and Programs subfolders when auto-categorize is active.

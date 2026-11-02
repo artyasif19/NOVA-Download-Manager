@@ -516,6 +516,7 @@ fn main() {
     let engine_setup = Arc::clone(&engine);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             engine_setup.set_app_handle(app.handle().clone());
             Ok(())

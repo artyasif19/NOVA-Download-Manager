@@ -31,7 +31,7 @@ import {
 } from './services/storage';
 import { getAccentClasses, formatScheduledDateTime } from './utils/formatters';
 import { startRealDownload, pauseRealDownload, cancelRealDownload } from './services/realDownloader';
-import { fetchAllDownloads, invokeCommand, isTauriEnvironment, setupNativeDownloadListeners } from './services/tauriBridge';
+import { fetchAllDownloads, getNativeDefaultFolder, invokeCommand, isTauriEnvironment, setupNativeDownloadListeners } from './services/tauriBridge';
 
 export default function App() {
   const [downloads, setDownloads] = useState<DownloadItem[]>(loadStoredDownloads);
@@ -53,6 +53,16 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const accentClasses = getAccentClasses(settings.accentColor);
+
+  // Desktop app: replace the placeholder download folder with the real Windows Downloads\NOVA folder
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    if (settings.defaultFolder !== 'C:\\Downloads\\NOVA') return;
+    getNativeDefaultFolder().then((dir) => {
+      if (dir) setSettings((prev) => ({ ...prev, defaultFolder: dir }));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Sync state to storage
   useEffect(() => {

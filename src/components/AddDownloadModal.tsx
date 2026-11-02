@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { invokeCommand, isTauriEnvironment, pickFolder } from '../services/tauriBridge';
 import { 
   X, 
   Download, 
@@ -138,11 +139,56 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   const [ftpPort, setFtpPort] = useState(21);
   const [passiveMode, setPassiveMode] = useState(true);
 
+  // Always start from the current default folder when the dialog is opened
+  useEffect(() => {
+    if (isOpen) setDirectory(settings.defaultFolder);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, settings.defaultFolder]);
+
+  const isYouTubeUrl = (u: string) => {
+    try {
+      const h = new URL(u.trim()).hostname.toLowerCase();
+      return /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/.test(h);
+    } catch {
+      return false;
+    }
+  };
+
+  const YOUTUBE_MESSAGE =
+    'YouTube links are web pages, not direct files, so NOVA cannot download them. ' +
+    'NOVA downloads direct file links (HTTP/HTTPS/FTP/SFTP). Video-site support needs a separate extractor such as yt-dlp.';
+
+  const handleBrowse = async () => {
+    const picked = await pickFolder('Select download folder');
+    if (picked) setDirectory(picked);
+  };
+
   // Auto-probe when URL looks complete
   const handleProbe = async (targetUrl = url) => {
     if (!targetUrl || targetUrl.length < 5) return;
+    if (isYouTubeUrl(targetUrl)) {
+      alert(YOUTUBE_MESSAGE);
+      return;
+    }
     setIsProbing(true);
     setProbeResult(null);
+
+    // Desktop app: probe through the native Rust engine (no browser CORS limits)
+    if (isTauriEnvironment()) {
+      try {
+        const info = await invokeCommand<any>('probe_target_url', { url: targetUrl });
+        setFilename(info.filename || targetUrl.split('/').pop()?.split('?')[0] || 'download.dat');
+        setTotalBytes(info.total_bytes || 0);
+        setSupportsRange(Boolean(info.supports_range));
+        setIsResumable(Boolean(info.is_resumable));
+        if (info.etag) setEtag(info.etag);
+      } catch (e: any) {
+        alert(`Could not reach this URL: ${e?.message || e}`);
+      } finally {
+        setIsProbing(false);
+      }
+      return;
+    }
 
     const creds: ProtocolCredentials = {
       username: ftpUsername,
@@ -217,6 +263,11 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
+
+    if (isYouTubeUrl(url)) {
+      alert(YOUTUBE_MESSAGE);
+      return;
+    }
 
     // Check if DRM is present
     if (probeResult?.streamInfo?.hasDrm) {
@@ -510,8 +561,17 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                   type="text"
                   value={directory}
                   onChange={(e) => setDirectory(e.target.value)}
-                  className="w-full bg-[#0d1016] border border-white/[0.1] rounded pl-8 pr-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-white/30 font-mono text-[11px]"
+                  className="w-full bg-[#0d1016] border border-white/[0.1] rounded pl-8 pr-20 py-2 text-xs text-slate-200 focus:outline-none focus:border-white/30 font-mono text-[11px]"
                 />
+                {isTauriEnvironment() && (
+                  <button
+                    type="button"
+                    onClick={handleBrowse}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 px-2 py-1 text-[11px] rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-200"
+                  >
+                    Browse…
+                  </button>
+                )}
               </div>
             </div>
 

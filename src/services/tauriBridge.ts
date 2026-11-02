@@ -275,3 +275,34 @@ export async function fetchAllDownloads(): Promise<DownloadItem[]> {
     return [];
   }
 }
+
+
+/**
+ * Opens the native Windows folder picker. Returns the chosen folder, or null if cancelled
+ * (or when not running inside the desktop app).
+ */
+export async function pickFolder(title = 'Select download folder'): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const res = await invoke<string | string[] | null>('plugin:dialog|open', {
+      options: { directory: true, multiple: false, title },
+    });
+    if (!res) return null;
+    return Array.isArray(res) ? res[0] ?? null : res;
+  } catch (err) {
+    console.error('Folder picker failed:', err);
+    return null;
+  }
+}
+
+/** The real Windows Downloads folder joined with "NOVA" (desktop app only). */
+export async function getNativeDefaultFolder(): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const { downloadDir, join } = await import('@tauri-apps/api/path');
+    return await join(await downloadDir(), 'NOVA');
+  } catch (err) {
+    console.error('Could not resolve Downloads folder:', err);
+    return null;
+  }
+}
