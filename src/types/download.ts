@@ -34,7 +34,7 @@ export interface DownloadSegment {
   isActive: boolean;
 }
 
-export type DownloadProtocol = 'http' | 'https' | 'ftp' | 'ftps' | 'sftp' | 'hls' | 'dash';
+export type DownloadProtocol = 'http' | 'https' | 'ftp' | 'ftps' | 'sftp' | 'hls' | 'dash' | 'video';
 
 export interface ProtocolCredentials {
   username?: string;
@@ -87,6 +87,8 @@ export interface DownloadItem {
   blobUrl?: string;
   isRealDownload?: boolean;
   speedHistory?: SpeedHistoryPoint[];
+  videoQuality?: string; // video-site downloads: best | 1080 | 720 | 480 | audio
+  etaSeconds?: number; // seconds remaining reported by the engine (video downloads)
 }
 
 export interface CustomCategory {

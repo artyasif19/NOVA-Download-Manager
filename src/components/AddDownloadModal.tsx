@@ -145,18 +145,17 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, settings.defaultFolder]);
 
-  const isYouTubeUrl = (u: string) => {
+  const [videoQuality, setVideoQuality] = useState<'best' | '1080' | '720' | '480' | 'audio'>('best');
+
+  // Pages (not direct files) from well-known video sites are handled by the video downloader
+  const isVideoSiteUrl = (u: string) => {
     try {
       const h = new URL(u.trim()).hostname.toLowerCase();
-      return /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/.test(h);
+      return /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com|vimeo\.com|dailymotion\.com|twitch\.tv|tiktok\.com|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|soundcloud\.com|bilibili\.com)$/.test(h);
     } catch {
       return false;
     }
   };
-
-  const YOUTUBE_MESSAGE =
-    'YouTube links are web pages, not direct files, so NOVA cannot download them. ' +
-    'NOVA downloads direct file links (HTTP/HTTPS/FTP/SFTP). Video-site support needs a separate extractor such as yt-dlp.';
 
   const handleBrowse = async () => {
     const picked = await pickFolder('Select download folder');
@@ -166,8 +165,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   // Auto-probe when URL looks complete
   const handleProbe = async (targetUrl = url) => {
     if (!targetUrl || targetUrl.length < 5) return;
-    if (isYouTubeUrl(targetUrl)) {
-      alert(YOUTUBE_MESSAGE);
+    if (isVideoSiteUrl(targetUrl)) {
+      setProtocol('video');
       return;
     }
     setIsProbing(true);
@@ -264,8 +263,27 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     e.preventDefault();
     if (!url.trim()) return;
 
-    if (isYouTubeUrl(url)) {
-      alert(YOUTUBE_MESSAGE);
+    if (protocol === 'video') {
+      const videoItem: DownloadItem = {
+        id: `dl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        url: url.trim(),
+        filename: 'Fetching video info...',
+        directory,
+        totalBytes: 0,
+        downloadedBytes: 0,
+        speed: 0,
+        status: 'downloading',
+        category: 'video_audio',
+        protocol: 'video',
+        segmentsCount: 1,
+        segments: [],
+        supportsRange: true,
+        dateAdded: Date.now(),
+        priority: 'normal',
+        videoQuality,
+      };
+      onAddDownload(videoItem, true);
+      onClose();
       return;
     }
 
@@ -372,6 +390,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           <div className="flex items-center gap-2 p-1 bg-[#0c0e14] rounded-lg border border-white/[0.06]">
             {[
               { id: 'https', label: 'HTTP / HTTPS' },
+              { id: 'video', label: 'Video Sites' },
               { id: 'ftp', label: 'FTP / FTPS' },
               { id: 'sftp', label: 'SFTP (SSH)' },
               { id: 'hls', label: 'HLS / DASH Stream' },
@@ -402,6 +421,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 ? 'FTP Server URL (e.g. ftp://host/path/file.iso)'
                 : protocol === 'sftp'
                 ? 'SFTP Path (e.g. sftp://user@host:22/remote/path.zip)'
+                : protocol === 'video'
+                ? 'Video page link (YouTube, Vimeo, X, TikTok, Instagram, Facebook...)'
                 : 'Download or Stream URL'}
             </label>
             <div className="flex gap-2">
@@ -410,16 +431,17 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder={protocol === 'ftp' ? 'ftp://ftp.example.com/pub/file.tar.gz' : 'https://example.com/files/archive.zip'}
+                  placeholder={protocol === 'ftp' ? 'ftp://ftp.example.com/pub/file.tar.gz' : protocol === 'video' ? 'https://www.youtube.com/watch?v=...' : 'https://example.com/files/archive.zip'}
                   value={url}
                   onChange={(e) => {
                     setUrl(e.target.value);
                     setProbeResult(null);
+                    if (isVideoSiteUrl(e.target.value)) setProtocol('video');
                   }}
                   className="w-full bg-[#0d1016] border border-white/[0.1] rounded pl-8 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-white/30 font-mono"
                 />
               </div>
-              <button
+              {protocol !== 'video' && (<button
                 type="button"
                 onClick={() => handleProbe()}
                 disabled={!url || isProbing}
@@ -433,7 +455,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                   <Zap className="w-3.5 h-3.5 text-cyan-400" />
                 )}
                 <span>Verify & Probe</span>
-              </button>
+              </button>)}
             </div>
           </div>
 
@@ -521,6 +543,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           )}
 
           {/* File Name & Estimated Size */}
+          {protocol !== 'video' && (<>
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
               <label className="text-[11px] font-medium text-slate-300 block mb-1">
@@ -548,6 +571,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
               </div>
             </div>
           </div>
+
+          </>)}
 
           {/* Destination Folder & Category */}
           <div className="grid grid-cols-2 gap-3">
@@ -593,6 +618,39 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             </div>
           </div>
 
+          {protocol === 'video' && (
+            <div className="bg-[#0d1016] border border-white/[0.08] rounded-lg p-3 space-y-2">
+              <div className="font-semibold text-slate-200 text-xs">Video quality</div>
+              <div className="grid grid-cols-5 gap-2">
+                {([
+                  ['best', 'Best'],
+                  ['1080', '1080p'],
+                  ['720', '720p'],
+                  ['480', '480p'],
+                  ['audio', 'Audio MP3'],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setVideoQuality(id)}
+                    className={`py-1.5 rounded text-[11px] font-mono border transition-colors ${
+                      videoQuality === id
+                        ? `${accentClasses.bg} text-slate-950 font-bold border-transparent`
+                        : 'bg-[#141821] text-slate-300 border-white/[0.08] hover:bg-white/[0.06]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Single videos only (playlists are skipped). Only download content you have the right to save.
+                Protected (DRM) videos are not supported.
+              </p>
+            </div>
+          )}
+
+          {protocol !== 'video' && (<>
           {/* Connection Segmentation & Thread Allocation */}
           <div className="bg-[#0d1016] border border-white/[0.08] rounded-lg p-3 space-y-2">
             <div className="flex items-center justify-between">
@@ -747,6 +805,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
               </div>
             )}
           </div>
+
+          </>)}
 
           {/* Action Buttons */}
           <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/[0.08]">

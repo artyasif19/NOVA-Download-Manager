@@ -246,6 +246,8 @@ export default function App() {
             if (!b) return item;
             return {
               ...item,
+              filename: item.protocol === 'video' && b.filename ? b.filename : item.filename,
+              directory: item.protocol === 'video' && b.directory ? b.directory : item.directory,
               downloadedBytes: b.downloadedBytes,
               totalBytes: b.totalBytes || item.totalBytes,
               status: b.status,
@@ -304,6 +306,8 @@ export default function App() {
 
             return {
               ...d,
+              filename: payload.filename ? payload.filename : d.filename,
+              etaSeconds: payload.eta_seconds,
               downloadedBytes: payload.downloaded_bytes,
               totalBytes: payload.total_bytes > 0 ? payload.total_bytes : d.totalBytes,
               speed: payload.speed_bytes_sec,
@@ -321,6 +325,8 @@ export default function App() {
             if (d.id !== payload.id) return d;
             return {
               ...d,
+              filename: payload.filename ? payload.filename : d.filename,
+              etaSeconds: 0,
               downloadedBytes: payload.total_bytes > 0 ? payload.total_bytes : d.totalBytes,
               totalBytes: payload.total_bytes > 0 ? payload.total_bytes : d.totalBytes,
               speed: 0,
@@ -330,7 +336,7 @@ export default function App() {
             };
           })
         );
-        showToast(`Download Complete: ${payload.id}`);
+        showToast(`Download Complete: ${payload.filename || payload.id}`);
       },
       onError: (payload) => {
         setDownloads((prev) =>
@@ -494,12 +500,25 @@ export default function App() {
     }
   };
 
+  // Video-site links go to the video downloader; everything else to the normal engine
+  const startNativeDownload = (item: DownloadItem) =>
+    item.protocol === 'video'
+      ? invokeCommand('start_video_download', {
+          request: {
+            id: item.id,
+            url: item.url,
+            directory: item.directory,
+            quality: item.videoQuality || 'best',
+          },
+        })
+      : invokeCommand('start_download', { request: item });
+
   const handleRetry = async (id: string) => {
     activeTransfersRef.current.delete(id);
     const item = downloads.find(d => d.id === id);
     if (!item) return;
     try {
-      await invokeCommand('start_download', { request: item });
+      await startNativeDownload(item);
       setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'downloading', errorMessage: undefined } : d));
       showToast('Retrying transfer');
     } catch (err: any) {
@@ -561,7 +580,7 @@ export default function App() {
   const handleAddDownload = async (item: DownloadItem, startImmediately: boolean) => {
     try {
       if (startImmediately) {
-        await invokeCommand('start_download', { request: item });
+        await startNativeDownload(item);
         showToast(`Started: ${item.filename}`);
       } else {
         showToast(`Queued: ${item.filename}`);

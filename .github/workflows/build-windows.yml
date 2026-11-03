@@ -54,6 +54,21 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Download video tools (yt-dlp and ffmpeg)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "src-tauri/binaries/yt-dlp.exe"
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-lgpl.zip" -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-temp" -Force
+          $ffmpeg = Get-ChildItem -Path "ffmpeg-temp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          $ffprobe = Get-ChildItem -Path "ffmpeg-temp" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+          if (-not $ffmpeg -or -not $ffprobe) { throw "ffmpeg/ffprobe not found in download" }
+          Copy-Item $ffmpeg.FullName "src-tauri/binaries/ffmpeg.exe"
+          Copy-Item $ffprobe.FullName "src-tauri/binaries/ffprobe.exe"
+          if (-not (Test-Path "src-tauri/binaries/yt-dlp.exe")) { throw "yt-dlp.exe download failed" }
+          Get-ChildItem src-tauri/binaries | Format-Table Name, Length
+
       - name: Build NOVA application
         run: npm run tauri build
 

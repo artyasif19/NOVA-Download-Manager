@@ -299,7 +299,9 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
                 ? Math.min(100, Math.floor((item.downloadedBytes / item.totalBytes) * 100))
                 : 0;
               const remainingBytes = Math.max(0, item.totalBytes - item.downloadedBytes);
-              const etaSeconds = item.speed > 0 ? Math.ceil(remainingBytes / item.speed) : 0;
+              const etaSeconds = item.speed > 0
+                ? (item.etaSeconds && item.etaSeconds > 0 ? item.etaSeconds : Math.ceil(remainingBytes / item.speed))
+                : 0;
 
               return (
                 <tr

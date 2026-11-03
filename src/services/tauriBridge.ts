@@ -44,6 +44,8 @@ export interface NativeDownloadRecord {
 
 export interface NativeProgressPayload {
   id: string;
+  eta_seconds?: number;
+  filename?: string | null;
   downloaded_bytes: number;
   total_bytes: number;
   speed_bytes_sec: number;
@@ -59,6 +61,7 @@ export interface NativeProgressPayload {
 
 export interface NativeCompletedPayload {
   id: string;
+  filename?: string | null;
   total_bytes: number;
   sha256_calculated?: string | null;
   file_path: string;

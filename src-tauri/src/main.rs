@@ -3,16 +3,19 @@
 
 mod engine;
 mod db;
+mod video;
 
 use std::sync::Arc;
 use std::path::PathBuf;
 use tauri::{State, Manager};
 use engine::{DownloadEngine, DownloadRequest, ProbeInfo};
 use db::{Database, DownloadRecord};
+use video::{VideoManager, VideoRequest};
 
 pub struct AppState {
     pub engine: Arc<DownloadEngine>,
     pub db: Arc<Database>,
+    pub video: Arc<VideoManager>,
 }
 
 #[tauri::command]
@@ -34,18 +37,35 @@ async fn start_download(
 }
 
 #[tauri::command]
+async fn start_video_download(
+    request: VideoRequest,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>
+) -> Result<String, String> {
+    state.video.start(app, request)
+}
+
+#[tauri::command]
 async fn pause_download(
     id: String,
     state: State<'_, AppState>
 ) -> Result<(), String> {
+    if state.video.is_video(&id) {
+        state.video.pause(&id);
+        return Ok(());
+    }
     state.engine.pause_download(&id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn resume_download(
     id: String,
+    app: tauri::AppHandle,
     state: State<'_, AppState>
 ) -> Result<(), String> {
+    if state.video.is_video(&id) {
+        return state.video.resume(app, &id);
+    }
     state.engine.resume_download(&id).await.map_err(|e| e.to_string())
 }
 
@@ -54,6 +74,10 @@ async fn cancel_download(
     id: String,
     state: State<'_, AppState>
 ) -> Result<(), String> {
+    if state.video.is_video(&id) {
+        state.video.cancel(&id);
+        return Ok(());
+    }
     state.engine.cancel_download(&id).await.map_err(|e| e.to_string())
 }
 
@@ -77,6 +101,9 @@ async fn delete_download_item(
     id: String,
     state: State<'_, AppState>
 ) -> Result<(), String> {
+    if state.video.is_video(&id) {
+        state.video.cancel(&id);
+    }
     state.db.delete_download(&id).map_err(|e| e.to_string())
 }
 
@@ -513,6 +540,8 @@ fn main() {
     // Launch background persistent queue worker
     start_persistent_queue_worker(Arc::clone(&engine), Arc::clone(&db));
 
+    let video = Arc::new(VideoManager::new(Arc::clone(&db)));
+
     let engine_setup = Arc::clone(&engine);
 
     tauri::Builder::default()
@@ -521,10 +550,11 @@ fn main() {
             engine_setup.set_app_handle(app.handle().clone());
             Ok(())
         })
-        .manage(AppState { engine, db })
+        .manage(AppState { engine, db, video })
         .invoke_handler(tauri::generate_handler![
             probe_target_url,
             start_download,
+            start_video_download,
             pause_download,
             resume_download,
             cancel_download,

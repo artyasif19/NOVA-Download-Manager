@@ -271,6 +271,30 @@ impl Database {
         Ok(())
     }
 
+    /// Mark a video-site download as finished and store its real file name, folder and size
+    pub fn complete_video_download(
+        &self,
+        id: &str,
+        filename: &str,
+        directory: &str,
+        total_bytes: u64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE downloads SET status = 'completed', filename = ?1, directory = ?2,
+             total_bytes = ?3, downloaded_bytes = ?3, date_finished = ?4, error_message = NULL
+             WHERE id = ?5",
+            params![
+                filename,
+                directory,
+                total_bytes as i64,
+                chrono::Utc::now().timestamp_millis(),
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Persist genuine engine error message to SQLite
     pub fn save_download_error(&self, id: &str, error: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
