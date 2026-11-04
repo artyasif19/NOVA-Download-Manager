@@ -60,6 +60,7 @@ struct VideoStatusPayload {
 
 pub struct VideoManager {
     db: Arc<Database>,
+    app: Arc<Mutex<Option<AppHandle>>>,
     /// Running yt-dlp jobs. Sending "paused" or "cancelled" stops the process.
     jobs: Arc<Mutex<HashMap<String, oneshot::Sender<&'static str>>>>,
 }
@@ -68,8 +69,37 @@ impl VideoManager {
     pub fn new(db: Arc<Database>) -> Self {
         Self {
             db,
+            app: Arc::new(Mutex::new(None)),
             jobs: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn set_app_handle(&self, handle: AppHandle) {
+        *self.app.lock().unwrap() = Some(handle);
+    }
+
+    /// Start a video-page download requested by the browser extension (no UI involved).
+    pub fn start_headless(&self, url: &str, quality: &str) -> Result<String, String> {
+        let app = self
+            .app
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "NOVA is still starting, please try again in a moment".to_string())?;
+        let q = match quality {
+            "1080" | "720" | "480" | "audio" => quality,
+            _ => "best",
+        };
+        let id = format!("dl-vid-{}", chrono::Utc::now().timestamp_millis());
+        self.start(
+            app,
+            VideoRequest {
+                id,
+                url: url.to_string(),
+                directory: String::new(),
+                quality: Some(q.to_string()),
+            },
+        )
     }
 
     /// True when the download with this id was created by the video downloader.
@@ -157,6 +187,23 @@ impl VideoManager {
             jobs.lock().unwrap().remove(&id);
         });
     }
+}
+
+/// True for pages of well-known video sites (these are web pages, not direct files).
+pub fn is_video_page_url(url: &str) -> bool {
+    let rest = match url.split_once("://") {
+        Some((_, r)) => r,
+        None => return false,
+    };
+    let host_port = rest.split(|c| c == '/' || c == '?' || c == '#').next().unwrap_or("");
+    let host_port = host_port.rsplit('@').next().unwrap_or("");
+    let host = host_port.split(':').next().unwrap_or("").to_lowercase();
+    const SITES: [&str; 14] = [
+        "youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "dailymotion.com",
+        "twitch.tv", "tiktok.com", "instagram.com", "facebook.com", "fb.watch",
+        "twitter.com", "x.com", "reddit.com", "soundcloud.com",
+    ];
+    SITES.iter().any(|d| host == *d || host.ends_with(&format!(".{}", d)))
 }
 
 fn default_directory() -> String {

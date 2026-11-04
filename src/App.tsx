@@ -64,6 +64,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Apply the selected theme (dark | light | glass-dark | glass-light)
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', settings.theme || 'dark');
+  }, [settings.theme]);
+
   // Sync state to storage
   useEffect(() => {
     saveStoredDownloads(downloads);

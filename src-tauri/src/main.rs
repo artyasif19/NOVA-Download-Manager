@@ -207,7 +207,7 @@ async fn read_full_http_request<T: tokio::io::AsyncRead + Unpin>(
 }
 
 /// Start authenticated local IPC bridge for native messaging host communication
-fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>) {
+fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video: Arc<VideoManager>) {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let auth_token: String = (0..32).map(|_| format!("{:02x}", rng.gen::<u8>())).collect();
@@ -246,6 +246,7 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>) {
         while let Ok((mut socket, _)) = listener.accept().await {
             let eng = Arc::clone(&engine);
             let database = Arc::clone(&db);
+            let video_mgr = Arc::clone(&video);
             let expected_token = token_clone.clone();
 
             tokio::spawn(async move {
@@ -276,8 +277,26 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>) {
                             let is_proto_valid = url_str.starts_with("http:") || url_str.starts_with("https:") ||
                                 url_str.starts_with("ftp:") || url_str.starts_with("ftps:") ||
                                 url_str.starts_with("sftp:");
+                            let wants_video = (url_str.starts_with("http:") || url_str.starts_with("https:"))
+                                && (val.get("video").and_then(|v| v.as_bool()).unwrap_or(false)
+                                    || video::is_video_page_url(url_str));
 
-                            if is_proto_valid {
+                            if wants_video {
+                                let quality = val.get("quality").and_then(|q| q.as_str()).unwrap_or("best");
+                                match video_mgr.start_headless(url_str, quality) {
+                                    Ok(vid) => (true, serde_json::json!({
+                                        "status": "accepted",
+                                        "accepted": true,
+                                        "download_id": vid,
+                                        "video": true
+                                    }).to_string()),
+                                    Err(e) => (false, serde_json::json!({
+                                        "status": "rejected",
+                                        "accepted": false,
+                                        "reason": e
+                                    }).to_string()),
+                                }
+                            } else if is_proto_valid {
                                 if let Ok(Some(existing)) = database.find_active_or_queued_by_url(url_str) {
                                     let fname = existing.filename.clone();
                                     let dl_id = existing.id.clone();
@@ -534,20 +553,22 @@ fn main() {
     let db = Arc::new(Database::init().expect("Failed to initialize SQLite database"));
     let engine = Arc::new(DownloadEngine::new(Arc::clone(&db)));
 
+    let video = Arc::new(VideoManager::new(Arc::clone(&db)));
+
     // Launch secure local IPC bridge for native messaging host
-    start_local_ipc_service(Arc::clone(&engine), Arc::clone(&db));
+    start_local_ipc_service(Arc::clone(&engine), Arc::clone(&db), Arc::clone(&video));
 
     // Launch background persistent queue worker
     start_persistent_queue_worker(Arc::clone(&engine), Arc::clone(&db));
 
-    let video = Arc::new(VideoManager::new(Arc::clone(&db)));
-
+    let video_setup = Arc::clone(&video);
     let engine_setup = Arc::clone(&engine);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             engine_setup.set_app_handle(app.handle().clone());
+            video_setup.set_app_handle(app.handle().clone());
             Ok(())
         })
         .manage(AppState { engine, db, video })

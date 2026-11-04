@@ -23,6 +23,8 @@ struct ExtensionMessage {
     referrer: Option<String>,
     total_bytes: Option<u64>,
     mime_type: Option<String>,
+    video: Option<bool>,
+    quality: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

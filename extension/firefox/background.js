@@ -125,7 +125,37 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }).then(res => sendResponse(res));
     return true;
   }
+  if (request.action === "send_video_page") {
+    sendToHost({
+      action: "can_handle",
+      url: request.url,
+      video: true,
+      quality: request.quality || "best",
+      client: "firefox-extension"
+    }).then(res => sendResponse(res));
+    return true;
+  }
 });
+
+async function sendToHost(payload) {
+  return new Promise((resolve) => {
+    try {
+      const port = browser.runtime.connectNative(NATIVE_HOST_NAME);
+      let answered = false;
+      port.onMessage.addListener((response) => {
+        answered = true;
+        resolve(response);
+        port.disconnect();
+      });
+      port.onDisconnect.addListener(() => {
+        if (!answered) resolve({ status: "error", error: "Host disconnected" });
+      });
+      port.postMessage({ ...payload, timestamp: Date.now() });
+    } catch (e) {
+      resolve({ status: "error", error: e.message });
+    }
+  });
+}
 
 async function sendDownloadToNova(payload) {
   return new Promise((resolve) => {
@@ -144,7 +174,7 @@ async function sendDownloadToNova(payload) {
       });
 
       port.postMessage({
-        action: "queue_download",
+        action: "add_download",
         ...payload,
         timestamp: Date.now()
       });

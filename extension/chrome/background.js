@@ -152,6 +152,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(result);
     });
     return true; // Keep message channel open for async response
+  } else if (message.action === "send_video_page") {
+    // A page link from a video site (YouTube etc.): NOVA's video downloader takes over
+    try {
+      chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+        action: "can_handle",
+        url: message.url,
+        video: true,
+        quality: message.quality || "best",
+        client: "chromium-extension",
+        timestamp: Date.now()
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ status: "error", error: chrome.runtime.lastError.message });
+        } else {
+          sendResponse(response);
+        }
+      });
+    } catch (err) {
+      sendResponse({ status: "error", error: String(err) });
+    }
+    return true;
   } else if (message.action === "check_native_status") {
     pingNativeHost((status) => {
       sendResponse({ status });

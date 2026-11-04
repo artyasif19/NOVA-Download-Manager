@@ -332,6 +332,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {activeTab === 'appearance' && (
               <div className="space-y-4">
                 <div>
+                  <label className="font-medium text-slate-200 block mb-2">App Theme</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { id: 'dark', name: 'Dark', note: 'Classic NOVA black', bg: 'linear-gradient(135deg,#0c0e12,#171b24)', fg: '#e2e8f0' },
+                      { id: 'light', name: 'Light', note: 'Clean white', bg: 'linear-gradient(135deg,#ffffff,#e6ebf4)', fg: '#0f172a' },
+                      { id: 'glass-dark', name: 'Liquid Glass Dark', note: 'Frosted glass on a glowing night gradient', bg: 'linear-gradient(135deg,#0e7490 0%,#5b21b6 55%,#9f1239 100%)', fg: '#ffffff' },
+                      { id: 'glass-light', name: 'Liquid Glass Light', note: 'Frosted glass on a soft pastel gradient', bg: 'linear-gradient(135deg,#7dd3fc 0%,#c4b5fd 55%,#fbcfe8 100%)', fg: '#0f172a' },
+                    ] as const).map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => onUpdateSettings({ theme: t.id })}
+                        className={`p-2 rounded-lg border text-left transition-all ${
+                          (settings.theme || 'dark') === t.id
+                            ? 'bg-white/[0.08] border-white/30 text-white'
+                            : 'bg-white/[0.02] border-white/[0.06] text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
+                        }`}
+                      >
+                        <div
+                          className="h-12 rounded-md mb-2 flex items-center justify-center text-[11px] font-semibold"
+                          style={{ background: t.bg, color: t.fg }}
+                        >
+                          <span
+                            className="px-2.5 py-1 rounded-full"
+                            style={{
+                              background: t.id.startsWith('glass') ? 'rgba(255,255,255,0.28)' : 'rgba(128,128,128,0.18)',
+                              border: '1px solid rgba(255,255,255,0.4)',
+                              backdropFilter: 'blur(6px)',
+                            }}
+                          >
+                            Aa
+                          </span>
+                        </div>
+                        <div className="font-semibold text-xs">{t.name}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">{t.note}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-white/[0.06]">
                   <label className="font-medium text-slate-200 block mb-2">
                     System Accent Color Theme
                   </label>

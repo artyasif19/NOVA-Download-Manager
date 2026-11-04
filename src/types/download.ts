@@ -109,6 +109,7 @@ export interface AppSettings {
   minimizeToTray: boolean;
   autoCategorize: boolean;
   accentColor: 'cyan' | 'emerald' | 'violet' | 'amber' | 'crimson' | 'slate';
+  theme: 'dark' | 'light' | 'glass-dark' | 'glass-light';
   density: 'compact' | 'comfortable';
   userAgent: string;
   autoStartNewDownloads: boolean;

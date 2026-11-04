@@ -26,6 +26,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   minimizeToTray: true,
   autoCategorize: true,
   accentColor: 'cyan',
+  theme: 'dark',
   density: 'comfortable',
   userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
   autoStartNewDownloads: true,
