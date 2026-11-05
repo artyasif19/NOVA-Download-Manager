@@ -309,3 +309,81 @@ export async function getNativeDefaultFolder(): Promise<string | null> {
     return null;
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// Video format probing, browser-extension setup, autostart (desktop app only)
+// ---------------------------------------------------------------------------
+
+export interface VideoFormatInfo {
+  id: string;
+  height: number;
+  width: number;
+  fps: number;
+  hdr: boolean;
+  ext: string;
+  vcodec: string;
+  size: number;
+  has_audio: boolean;
+}
+
+export interface VideoInfo {
+  title: string;
+  uploader: string;
+  duration: number;
+  thumbnail: string;
+  formats: VideoFormatInfo[];
+  preview_url: string | null;
+  best_audio_size: number;
+}
+
+export async function probeVideo(url: string): Promise<VideoInfo> {
+  return invoke<VideoInfo>('probe_video', { url });
+}
+
+export interface ExtensionInfo {
+  chrome_dir: string;
+  firefox_dir: string;
+  chrome_ready: boolean;
+  firefox_ready: boolean;
+  host_ready: boolean;
+}
+
+export async function getExtensionInfo(): Promise<ExtensionInfo | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    return await invoke<ExtensionInfo>('get_extension_info');
+  } catch (err) {
+    console.error('Extension info failed:', err);
+    return null;
+  }
+}
+
+export async function openFolder(path: string): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  await invoke('open_folder', { path });
+}
+
+export async function openBrowserExtensions(browser: 'chrome' | 'edge' | 'brave' | 'firefox'): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  await invoke('open_browser_extensions', { browser });
+}
+
+export async function setAutostart(enabled: boolean): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  try {
+    await invoke('set_autostart', { enabled });
+  } catch (err) {
+    console.error('Autostart change failed:', err);
+  }
+}
+
+/** Human label for a resolution: 2160 -> "4K", 1440 -> "2K", 1080 -> "Full HD", ... */
+export function resolutionName(height: number): string {
+  if (height >= 4320) return '8K';
+  if (height >= 2160) return '4K';
+  if (height >= 1440) return '2K';
+  if (height >= 1080) return 'Full HD';
+  if (height >= 720) return 'HD';
+  return 'SD';
+}

@@ -11,6 +11,8 @@ import { DownloadTable } from './components/DownloadTable';
 import { AddDownloadModal } from './components/AddDownloadModal';
 import { DownloadDetailsModal } from './components/DownloadDetailsModal';
 import { VideoSnifferLab } from './components/VideoSnifferLab';
+import { SpeedTest } from './components/SpeedTest';
+import { DownloadConfirmModal, ExtensionDownloadRequest } from './components/DownloadConfirmModal';
 import { BrowserExtensionHub } from './components/BrowserExtensionHub';
 import { SettingsModal } from './components/SettingsModal';
 import { ScheduleModal } from './components/ScheduleModal';
@@ -31,7 +33,8 @@ import {
 } from './services/storage';
 import { getAccentClasses, formatScheduledDateTime } from './utils/formatters';
 import { startRealDownload, pauseRealDownload, cancelRealDownload } from './services/realDownloader';
-import { fetchAllDownloads, getNativeDefaultFolder, invokeCommand, isTauriEnvironment, setupNativeDownloadListeners } from './services/tauriBridge';
+import { fetchAllDownloads, getNativeDefaultFolder, invokeCommand, isTauriEnvironment, setAutostart, setupNativeDownloadListeners } from './services/tauriBridge';
+import { listen } from '@tauri-apps/api/event';
 
 export default function App() {
   const [downloads, setDownloads] = useState<DownloadItem[]>(loadStoredDownloads);
@@ -43,8 +46,10 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const [activeView, setActiveView] = useState<'downloads' | 'video_sniffer' | 'browser_hub'>('downloads');
+  const [activeView, setActiveView] = useState<'downloads' | 'video_sniffer' | 'browser_hub' | 'speed_test'>('downloads');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [videoPrefill, setVideoPrefill] = useState<{ url: string; quality?: string; nonce: number } | null>(null);
+  const [extRequest, setExtRequest] = useState<ExtensionDownloadRequest | null>(null);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
@@ -64,10 +69,54 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Requests coming from the browser extension (IDM-style dialogs)
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    const unlisteners: Array<() => void> = [];
+    let disposed = false;
+    (async () => {
+      try {
+        const a = await listen<{ url: string; filename: string; totalBytes: number; mimeType: string; referrer: string }>(
+          'extension-download-request',
+          (e) => setExtRequest({ ...e.payload, nonce: Date.now() })
+        );
+        const b = await listen<{ url: string; quality?: string }>('extension-video-request', (e) => {
+          setVideoPrefill({ url: e.payload.url, quality: e.payload.quality, nonce: Date.now() });
+          setIsAddModalOpen(true);
+        });
+        if (disposed) {
+          a();
+          b();
+        } else {
+          unlisteners.push(a, b);
+        }
+      } catch (err) {
+        console.warn('Extension event listeners failed:', err);
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisteners.forEach((u) => u());
+    };
+  }, []);
+
+  // Start with Windows
+  useEffect(() => {
+    setAutostart(settings.startWithWindows);
+  }, [settings.startWithWindows]);
+
   // Apply the selected theme (dark | light | glass-dark | glass-light)
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', settings.theme || 'dark');
-  }, [settings.theme]);
+    const root = document.documentElement;
+    root.setAttribute('data-theme', settings.theme || 'dark');
+    root.setAttribute('data-glass', settings.glassStyle || 'default');
+    const colors = settings.customColors && settings.customColors.length >= 3 ? settings.customColors : ['#06b6d4', '#8b5cf6', '#f43f5e'];
+    root.style.setProperty('--nova-c1', colors[0]);
+    root.style.setProperty('--nova-c2', colors[1]);
+    root.style.setProperty('--nova-c3', colors[2]);
+    if (settings.customBgImage) root.style.setProperty('--nova-bg-image', `url("${settings.customBgImage}")`);
+    else root.style.removeProperty('--nova-bg-image');
+  }, [settings.theme, settings.glassStyle, settings.customColors, settings.customBgImage]);
 
   // Sync state to storage
   useEffect(() => {
@@ -739,6 +788,8 @@ export default function App() {
           />
         )}
 
+        {activeView === 'speed_test' && <SpeedTest accentClasses={accentClasses} />}
+
         {activeView === 'browser_hub' && (
           <BrowserExtensionHub
             settings={settings}
@@ -753,6 +804,15 @@ export default function App() {
         onClose={() => setIsAddModalOpen(false)}
         onAddDownload={handleAddDownload}
         settings={settings}
+        prefill={videoPrefill}
+        accentClasses={accentClasses}
+      />
+
+      <DownloadConfirmModal
+        request={extRequest}
+        settings={settings}
+        onClose={() => setExtRequest(null)}
+        onAddDownload={handleAddDownload}
         accentClasses={accentClasses}
       />
 

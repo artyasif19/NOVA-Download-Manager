@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::oneshot;
 
@@ -74,6 +74,10 @@ impl VideoManager {
         }
     }
 
+    pub fn app_handle(&self) -> Option<AppHandle> {
+        self.app.lock().unwrap().clone()
+    }
+
     pub fn set_app_handle(&self, handle: AppHandle) {
         *self.app.lock().unwrap() = Some(handle);
     }
@@ -88,6 +92,7 @@ impl VideoManager {
             .ok_or_else(|| "NOVA is still starting, please try again in a moment".to_string())?;
         let q = match quality {
             "1080" | "720" | "480" | "audio" => quality,
+            q if q.starts_with("fmt:") => quality,
             _ => "best",
         };
         let id = format!("dl-vid-{}", chrono::Utc::now().timestamp_millis());
@@ -223,18 +228,7 @@ fn emit_status(app: &AppHandle, id: &str, status: &str) {
 
 /// Finds a bundled helper tool (yt-dlp.exe / ffmpeg.exe / ffprobe.exe).
 fn find_tool(app: &AppHandle, name: &str) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Ok(res) = app.path().resource_dir() {
-        dirs.push(res.join("binaries"));
-        dirs.push(res.clone());
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            dirs.push(parent.join("binaries"));
-            dirs.push(parent.to_path_buf());
-        }
-    }
-    dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
+    crate::host_setup::find_resource_file(app, name)
 }
 
 fn quality_args(quality: &str) -> Vec<String> {
@@ -242,6 +236,19 @@ fn quality_args(quality: &str) -> Vec<String> {
     match quality {
         "audio" => {
             args.extend(["-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "0"].map(String::from));
+        }
+        q if q.starts_with("fmt:") => {
+            // An exact format picked from the list: keep only safe characters
+            let id: String = q[4..]
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
+                .collect();
+            if id.is_empty() {
+                args.extend(["-f", "bv*+ba/b", "-S", "res,ext:mp4:m4a", "--merge-output-format", "mp4"].map(String::from));
+            } else {
+                args.push("-f".into());
+                args.push(format!("{id}+ba/{id}/b"));
+            }
         }
         q @ ("1080" | "720" | "480") => {
             args.push("-f".into());
@@ -520,4 +527,195 @@ async fn run_job(
         }
         fail(msg);
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Format probing (resolution list) for the Add Download dialog and Media Grabber
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoFormat {
+    pub id: String,
+    pub height: u32,
+    pub width: u32,
+    pub fps: u32,
+    pub hdr: bool,
+    pub ext: String,
+    pub vcodec: String,
+    pub size: u64,
+    pub has_audio: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoInfo {
+    pub title: String,
+    pub uploader: String,
+    pub duration: u64,
+    pub thumbnail: String,
+    pub formats: Vec<VideoFormat>,
+    /// Direct link of a small combined (video+audio) stream for the in-app preview player
+    pub preview_url: Option<String>,
+    pub best_audio_size: u64,
+}
+
+fn as_u64(v: &serde_json::Value) -> u64 {
+    v.as_u64().or_else(|| v.as_f64().map(|f| f as u64)).unwrap_or(0)
+}
+
+fn short_codec(vcodec: &str) -> String {
+    let v = vcodec.to_lowercase();
+    if v.starts_with("av01") {
+        "AV1".to_string()
+    } else if v.starts_with("vp9") || v.starts_with("vp09") {
+        "VP9".to_string()
+    } else if v.starts_with("avc") || v.starts_with("h264") {
+        "H.264".to_string()
+    } else if v.starts_with("hev") || v.starts_with("hvc") || v.starts_with("h265") {
+        "H.265".to_string()
+    } else {
+        vcodec.split('.').next().unwrap_or("").to_uppercase()
+    }
+}
+
+/// Lists every resolution a video offers (lowest to highest), with fps / HDR / size.
+#[tauri::command]
+pub async fn probe_video(app: AppHandle, url: String) -> Result<VideoInfo, String> {
+    let url = url.trim().to_string();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("Please enter a full link starting with http:// or https://".to_string());
+    }
+    let ytdlp = find_tool(&app, "yt-dlp.exe")
+        .ok_or_else(|| "Video downloader component (yt-dlp.exe) was not found. Please reinstall NOVA.".to_string())?;
+
+    let mut cmd = tokio::process::Command::new(&ytdlp);
+    cmd.arg("--ignore-config")
+        .arg("--no-playlist")
+        .arg("--no-warnings")
+        .arg("--skip-download")
+        .arg("-J")
+        .arg(&url)
+        .env("PYTHONIOENCODING", "utf-8")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = match tokio::time::timeout(Duration::from_secs(90), cmd.output()).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return Err(format!("Could not start the video downloader: {}", e)),
+        Err(_) => return Err("Timed out while reading the video information. Please try again.".to_string()),
+    };
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let msg = err
+            .lines()
+            .rev()
+            .find(|l| l.starts_with("ERROR"))
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "This link could not be read as a video.".to_string());
+        return Err(msg);
+    }
+
+    let root: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("Unreadable video information: {}", e))?;
+
+    let list = root
+        .get("formats")
+        .and_then(|f| f.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // One entry per (height, fps, hdr): keep the best (largest bitrate) stream of each
+    let mut best: HashMap<(u32, u32, bool), (f64, VideoFormat)> = HashMap::new();
+    let mut best_audio: u64 = 0;
+    let mut preview: Option<(u32, String)> = None;
+
+    for f in &list {
+        let vcodec = f.get("vcodec").and_then(|v| v.as_str()).unwrap_or("none");
+        let acodec = f.get("acodec").and_then(|v| v.as_str()).unwrap_or("none");
+        let has_video = vcodec != "none";
+        let has_audio = acodec != "none";
+        let size = as_u64(f.get("filesize").unwrap_or(&serde_json::Value::Null))
+            .max(as_u64(f.get("filesize_approx").unwrap_or(&serde_json::Value::Null)));
+
+        if !has_video && has_audio {
+            best_audio = best_audio.max(size);
+            continue;
+        }
+        if !has_video {
+            continue;
+        }
+        let height = as_u64(f.get("height").unwrap_or(&serde_json::Value::Null)) as u32;
+        if height == 0 {
+            continue;
+        }
+        let protocol = f.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
+        let width = as_u64(f.get("width").unwrap_or(&serde_json::Value::Null)) as u32;
+        let fps = f.get("fps").and_then(|v| v.as_f64()).unwrap_or(0.0).round() as u32;
+        let dyn_range = f.get("dynamic_range").and_then(|v| v.as_str()).unwrap_or("SDR");
+        let hdr = dyn_range != "SDR" && !dyn_range.is_empty();
+        let id = f.get("format_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let ext = f.get("ext").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let tbr = f.get("tbr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+        // preview candidate: combined stream with direct https link, up to 720p
+        if has_audio && height <= 720 && protocol.starts_with("http") && ext == "mp4" {
+            if let Some(u) = f.get("url").and_then(|v| v.as_str()) {
+                if preview.as_ref().map(|(h, _)| height > *h).unwrap_or(true) {
+                    preview = Some((height, u.to_string()));
+                }
+            }
+        }
+
+        let entry = VideoFormat {
+            id,
+            height,
+            width,
+            fps,
+            hdr,
+            ext,
+            vcodec: short_codec(vcodec),
+            size,
+            has_audio,
+        };
+        let key = (height, fps, hdr);
+        let replace = match best.get(&key) {
+            Some((old_tbr, _)) => tbr > *old_tbr,
+            None => true,
+        };
+        if replace {
+            best.insert(key, (tbr, entry));
+        }
+    }
+
+    let mut formats: Vec<VideoFormat> = best.into_values().map(|(_, f)| f).collect();
+    formats.sort_by(|a, b| {
+        a.height
+            .cmp(&b.height)
+            .then(a.fps.cmp(&b.fps))
+            .then(a.hdr.cmp(&b.hdr))
+    });
+
+    let text = |k: &str| root.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    Ok(VideoInfo {
+        title: text("title"),
+        uploader: {
+            let u = text("uploader");
+            if u.is_empty() { text("channel") } else { u }
+        },
+        duration: as_u64(root.get("duration").unwrap_or(&serde_json::Value::Null)),
+        thumbnail: text("thumbnail"),
+        formats,
+        preview_url: preview.map(|(_, u)| u),
+        best_audio_size: best_audio,
+    })
 }

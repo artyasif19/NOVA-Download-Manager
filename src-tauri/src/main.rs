@@ -4,12 +4,14 @@
 mod engine;
 mod db;
 mod video;
+mod host_setup;
 
 use std::sync::Arc;
 use std::path::PathBuf;
 use tauri::{State, Manager};
 use engine::{DownloadEngine, DownloadRequest, ProbeInfo};
 use db::{Database, DownloadRecord};
+use tauri::Emitter;
 use video::{VideoManager, VideoRequest};
 
 pub struct AppState {
@@ -283,17 +285,24 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
 
                             if wants_video {
                                 let quality = val.get("quality").and_then(|q| q.as_str()).unwrap_or("best");
-                                match video_mgr.start_headless(url_str, quality) {
-                                    Ok(vid) => (true, serde_json::json!({
-                                        "status": "accepted",
-                                        "accepted": true,
-                                        "download_id": vid,
-                                        "video": true
-                                    }).to_string()),
-                                    Err(e) => (false, serde_json::json!({
+                                match video_mgr.app_handle() {
+                                    Some(app) => {
+                                        host_setup::bring_to_front(&app);
+                                        let _ = app.emit("extension-video-request", serde_json::json!({
+                                            "url": url_str,
+                                            "quality": quality
+                                        }));
+                                        (true, serde_json::json!({
+                                            "status": "accepted",
+                                            "accepted": true,
+                                            "confirm": true,
+                                            "video": true
+                                        }).to_string())
+                                    }
+                                    None => (false, serde_json::json!({
                                         "status": "rejected",
                                         "accepted": false,
-                                        "reason": e
+                                        "reason": "NOVA is still starting, please try again in a moment"
                                     }).to_string()),
                                 }
                             } else if is_proto_valid {
@@ -308,6 +317,30 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
                                         "durable": true,
                                         "duplicate_prevented": true
                                     }).to_string())
+                                } else if !val.get("direct").and_then(|d| d.as_bool()).unwrap_or(false) {
+                                    // Ask the user first (IDM-style "Download File Info" dialog)
+                                    match video_mgr.app_handle() {
+                                        Some(app) => {
+                                            host_setup::bring_to_front(&app);
+                                            let _ = app.emit("extension-download-request", serde_json::json!({
+                                                "url": url_str,
+                                                "filename": val.get("filename").and_then(|f| f.as_str()).unwrap_or(""),
+                                                "totalBytes": val.get("total_bytes").or_else(|| val.get("totalBytes")).and_then(|t| t.as_u64()).unwrap_or(0),
+                                                "mimeType": val.get("mime_type").or_else(|| val.get("mimeType")).and_then(|m| m.as_str()).unwrap_or(""),
+                                                "referrer": val.get("referrer").and_then(|r| r.as_str()).unwrap_or("")
+                                            }));
+                                            (true, serde_json::json!({
+                                                "status": "accepted",
+                                                "accepted": true,
+                                                "confirm": true
+                                            }).to_string())
+                                        }
+                                        None => (false, serde_json::json!({
+                                            "status": "rejected",
+                                            "accepted": false,
+                                            "reason": "NOVA is still starting, please try again in a moment"
+                                        }).to_string()),
+                                    }
                                 } else {
                                     let raw_fname = val.get("filename")
                                         .and_then(|f| f.as_str())
@@ -569,6 +602,21 @@ fn main() {
         .setup(move |app| {
             engine_setup.set_app_handle(app.handle().clone());
             video_setup.set_app_handle(app.handle().clone());
+
+            // Register the browser helper + extensions (no manual steps needed)
+            let setup_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(e) = host_setup::ensure_native_host(&setup_handle) {
+                    eprintln!("[NOVA] Browser helper setup: {}", e);
+                }
+            });
+
+            // Started by Windows at login: stay out of the way
+            if std::env::args().any(|a| a == "--minimized") {
+                if let Some(w) = tauri::Manager::get_webview_window(app, "main") {
+                    let _ = w.minimize();
+                }
+            }
             Ok(())
         })
         .manage(AppState { engine, db, video })
@@ -576,6 +624,11 @@ fn main() {
             probe_target_url,
             start_download,
             start_video_download,
+            video::probe_video,
+            host_setup::get_extension_info,
+            host_setup::open_folder,
+            host_setup::open_browser_extensions,
+            host_setup::set_autostart,
             pause_download,
             resume_download,
             cancel_download,

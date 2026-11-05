@@ -48,8 +48,9 @@ const SUPPORTED_PROTOCOLS = new Set(["http:", "https:", "ftp:", "ftps:", "sftp:"
 
 // Intercept browser downloads ONLY if user explicitly enabled automatic interception AND handoff verification has passed
 browser.downloads.onCreated.addListener(async (downloadItem) => {
-  const settings = await browser.storage.local.get(["autoIntercept", "handoffVerified"]);
-  if (settings.autoIntercept !== true || settings.handoffVerified !== true) return;
+  const settings = await browser.storage.local.get(["autoIntercept"]);
+  // On by default (like IDM). The browser download is only cancelled after NOVA accepts it.
+  if (settings.autoIntercept === false) return;
 
   const url = downloadItem.url;
   if (!url) return;
@@ -174,7 +175,7 @@ async function sendDownloadToNova(payload) {
       });
 
       port.postMessage({
-        action: "add_download",
+        action: "can_handle",
         ...payload,
         timestamp: Date.now()
       });

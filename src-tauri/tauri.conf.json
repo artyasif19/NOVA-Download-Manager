@@ -30,8 +30,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis",
-      "msi"
+      "nsis"
     ],
     "icon": [
       "icons/32x32.png",
@@ -49,7 +48,9 @@
       }
     },
     "resources": [
-      "binaries/*"
+      "binaries/*",
+      "ext-chrome/*",
+      "ext-firefox/*"
     ]
   }
 }

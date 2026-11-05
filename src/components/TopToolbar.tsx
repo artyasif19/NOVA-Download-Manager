@@ -37,8 +37,8 @@ interface TopToolbarProps {
   onOpenSettings: () => void;
   onOpenBrowserHub: () => void;
   onOpenVideoSniffer: () => void;
-  activeView: 'downloads' | 'video_sniffer' | 'browser_hub';
-  setActiveView: (view: 'downloads' | 'video_sniffer' | 'browser_hub') => void;
+  activeView: 'downloads' | 'video_sniffer' | 'browser_hub' | 'speed_test';
+  setActiveView: (view: 'downloads' | 'video_sniffer' | 'browser_hub' | 'speed_test') => void;
   accentClasses: {
     bg: string;
     text: string;
@@ -168,6 +168,18 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           >
             <Chrome className="w-3 h-3" />
             <span>Browser Bridge</span>
+          </button>
+
+          <button
+            onClick={() => setActiveView('speed_test')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
+              activeView === 'speed_test'
+                ? 'bg-white/[0.1] text-white shadow-xs'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Gauge className="w-3 h-3" />
+            <span>Speed Test</span>
           </button>
         </div>
 

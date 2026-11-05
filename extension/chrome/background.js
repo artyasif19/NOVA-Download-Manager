@@ -57,9 +57,9 @@ const SUPPORTED_PROTOCOLS = new Set(["http:", "https:", "ftp:", "ftps:", "sftp:"
 
 // Intercept browser downloads ONLY if user explicitly enabled automatic interception AND handoff verification has passed
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
-  const { autoIntercept, handoffVerified } = await chrome.storage.local.get(["autoIntercept", "handoffVerified"]);
-  // Disabled by default: require explicit user opt-in and verified handoff test
-  if (autoIntercept !== true || handoffVerified !== true) return;
+  const { autoIntercept } = await chrome.storage.local.get(["autoIntercept"]);
+  // On by default (like IDM). The browser download is only cancelled after NOVA accepts it.
+  if (autoIntercept === false) return;
 
   const url = downloadItem.url;
   if (!url) return;
@@ -184,7 +184,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Send message to Windows Native Messaging Host with callback
 function sendDownloadToNova(details, callback) {
   const message = {
-    action: "add_download",
+    action: "can_handle",
     url: details.url,
     filename: details.filename || extractFilename(details.url),
     headers: details.referrer ? { "Referer": details.referrer, ...(details.headers || {}) } : details.headers,

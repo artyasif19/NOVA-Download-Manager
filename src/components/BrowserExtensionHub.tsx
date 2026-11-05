@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { ExtensionInfo, getExtensionInfo, openBrowserExtensions, openFolder, isTauriEnvironment } from '../services/tauriBridge';
 import { 
   Chrome, 
   Terminal, 
@@ -31,6 +32,64 @@ interface BrowserExtensionHubProps {
     badge: string;
   };
 }
+
+const ExtensionQuickSetup: React.FC<{ accentClasses: { bg: string; text: string } }> = ({ accentClasses }) => {
+  const [info, setInfo] = useState<ExtensionInfo | null>(null);
+  useEffect(() => {
+    getExtensionInfo().then(setInfo);
+  }, []);
+  if (!isTauriEnvironment()) return null;
+  return (
+    <div className="p-4 rounded-xl border border-white/[0.1] bg-white/[0.03] space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-slate-100 font-semibold text-sm">Quick setup (one time)</div>
+          <div className="text-slate-400 mt-0.5">
+            NOVA has already registered its browser helper. Add the extension to your browser once:
+          </div>
+        </div>
+        <span
+          className={`text-[11px] px-2 py-0.5 rounded-full border ${
+            info?.host_ready ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-300 border-amber-500/30 bg-amber-500/10'
+          }`}
+        >
+          {info === null ? 'Checking...' : info.host_ready ? 'Browser helper ready' : 'Helper missing - reinstall NOVA'}
+        </span>
+      </div>
+      <ol className="list-decimal pl-5 space-y-1 text-slate-300">
+        <li>Click your browser below to open its extensions page, then switch on <b>Developer mode</b> (top-right).</li>
+        <li>Click <b>Load unpacked</b> and choose the NOVA extension folder (use "Open extension folder" to find it).</li>
+        <li>Done. A "Download this video" button appears on videos, and downloads open NOVA's confirmation window.</li>
+      </ol>
+      <div className="flex flex-wrap items-center gap-2">
+        {(['chrome', 'edge', 'brave'] as const).map((b) => (
+          <button
+            key={b}
+            onClick={() => openBrowserExtensions(b)}
+            className={`px-3 py-1.5 rounded-md font-semibold text-slate-950 ${accentClasses.bg}`}
+          >
+            Open {b === 'chrome' ? 'Chrome' : b === 'edge' ? 'Edge' : 'Brave'} extensions
+          </button>
+        ))}
+        <button
+          onClick={() => info && openFolder(info.chrome_dir)}
+          className="px-3 py-1.5 rounded-md border border-white/[0.15] text-slate-200 hover:bg-white/[0.06]"
+        >
+          Open extension folder (Chrome / Edge / Brave)
+        </button>
+        <button
+          onClick={() => info && openFolder(info.firefox_dir)}
+          className="px-3 py-1.5 rounded-md border border-white/[0.15] text-slate-200 hover:bg-white/[0.06]"
+        >
+          Firefox folder
+        </button>
+      </div>
+      {info && (
+        <div className="font-mono text-[11px] text-slate-500 break-all">{info.chrome_dir}</div>
+      )}
+    </div>
+  );
+};
 
 export const BrowserExtensionHub: React.FC<BrowserExtensionHubProps> = ({
   settings,
@@ -149,6 +208,8 @@ reg add "HKCU\\Software\\Mozilla\\NativeMessagingHosts\\com.nova.downloadmanager
 
   return (
     <div className="flex-1 bg-[#0c0e12] overflow-y-auto p-5 space-y-5 select-none text-xs">
+      <ExtensionQuickSetup accentClasses={accentClasses} />
+
       {/* Header */}
       <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
         <div>

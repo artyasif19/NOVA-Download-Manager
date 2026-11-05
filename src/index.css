@@ -329,3 +329,46 @@ html[data-theme="light"] [class~="text-rose-300"] { color: #e11d48; }
 html[data-theme="glass-light"] [class~="text-rose-300"] { color: #e11d48; }
 html[data-theme="light"] [class~="text-rose-400"] { color: #e11d48; }
 html[data-theme="glass-light"] [class~="text-rose-400"] { color: #e11d48; }
+
+/* ---------- Glass gradient styles (Settings > Appearance) ---------- */
+html[data-theme="glass-dark"][data-glass="aurora"] { background-image: radial-gradient(900px 620px at 8% 6%, rgba(16,185,129, 0.4), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, rgba(6,182,212, 0.34), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, rgba(99,102,241, 0.3), transparent 62%); }
+html[data-theme="glass-light"][data-glass="aurora"] { background-image: radial-gradient(900px 620px at 8% 6%, rgba(16,185,129, 0.55), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, rgba(6,182,212, 0.5), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, rgba(99,102,241, 0.45), transparent 62%); }
+html[data-theme="glass-dark"][data-glass="sunset"] { background-image: radial-gradient(900px 620px at 8% 6%, rgba(251,146,60, 0.4), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, rgba(244,63,94, 0.34), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, rgba(168,85,247, 0.3), transparent 62%); }
+html[data-theme="glass-light"][data-glass="sunset"] { background-image: radial-gradient(900px 620px at 8% 6%, rgba(251,146,60, 0.55), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, rgba(244,63,94, 0.5), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, rgba(168,85,247, 0.45), transparent 62%); }
+html[data-theme="glass-dark"][data-glass="ocean"] { background-image: radial-gradient(900px 620px at 8% 6%, rgba(14,165,233, 0.4), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, rgba(37,99,235, 0.34), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, rgba(20,184,166, 0.3), transparent 62%); }
+html[data-theme="glass-light"][data-glass="ocean"] { background-image: radial-gradient(900px 620px at 8% 6%, rgba(14,165,233, 0.55), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, rgba(37,99,235, 0.5), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, rgba(20,184,166, 0.45), transparent 62%); }
+html[data-theme="glass-dark"][data-glass="rose"] { background-image: radial-gradient(900px 620px at 8% 6%, rgba(244,114,182, 0.4), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, rgba(168,85,247, 0.34), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, rgba(251,191,36, 0.3), transparent 62%); }
+html[data-theme="glass-light"][data-glass="rose"] { background-image: radial-gradient(900px 620px at 8% 6%, rgba(244,114,182, 0.55), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, rgba(168,85,247, 0.5), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, rgba(251,191,36, 0.45), transparent 62%); }
+html[data-theme="glass-dark"][data-glass="custom"] { background-image: radial-gradient(900px 620px at 8% 6%, color-mix(in srgb, var(--nova-c1, #06b6d4) 42%, transparent), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, color-mix(in srgb, var(--nova-c2, #8b5cf6) 42%, transparent), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, color-mix(in srgb, var(--nova-c3, #f43f5e) 42%, transparent), transparent 62%); }
+html[data-theme="glass-light"][data-glass="custom"] { background-image: radial-gradient(900px 620px at 8% 6%, color-mix(in srgb, var(--nova-c1, #06b6d4) 55%, transparent), transparent 62%),
+    radial-gradient(820px 600px at 96% 14%, color-mix(in srgb, var(--nova-c2, #8b5cf6) 55%, transparent), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, color-mix(in srgb, var(--nova-c3, #f43f5e) 55%, transparent), transparent 62%); }
+html[data-theme="glass-dark"][data-glass="image"] {
+  background-image: linear-gradient(rgba(5, 7, 13, 0.35), rgba(5, 7, 13, 0.35)), var(--nova-bg-image, none);
+  background-size: cover;
+  background-position: center;
+}
+html[data-theme="glass-light"][data-glass="image"] {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.25)), var(--nova-bg-image, none);
+  background-size: cover;
+  background-position: center;
+}
+

@@ -14,3 +14,6 @@ Thumbs.db
 *.sqlite-shm
 *.sqlite-wal
 **/session.auth
+src-tauri/ext-chrome/
+src-tauri/ext-firefox/
+src-tauri/binaries/*.exe

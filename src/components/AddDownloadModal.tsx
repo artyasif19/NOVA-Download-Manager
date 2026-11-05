@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { invokeCommand, isTauriEnvironment, pickFolder } from '../services/tauriBridge';
+import { invokeCommand, isTauriEnvironment, pickFolder, probeVideo, resolutionName, VideoInfo } from '../services/tauriBridge';
 import { 
   X, 
   Download, 
@@ -47,6 +47,8 @@ interface AddDownloadModalProps {
   onClose: () => void;
   onAddDownload: (item: DownloadItem, startImmediately: boolean) => void;
   settings: AppSettings;
+  /** Set by the browser extension: open on the Video Sites tab with this link */
+  prefill?: { url: string; quality?: string; nonce: number } | null;
   accentClasses: {
     bg: string;
     text: string;
@@ -55,63 +57,12 @@ interface AddDownloadModalProps {
   };
 }
 
-const PRESETS = [
-  {
-    name: 'Ubuntu 24.04 ISO (HTTPS)',
-    url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04.1-desktop-amd64.iso',
-    protocol: 'https' as const,
-    size: 5974000000,
-    category: 'compressed' as const,
-    resumable: true,
-  },
-  {
-    name: 'Big Buck Bunny 4K (MP4)',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-    protocol: 'https' as const,
-    size: 158008374,
-    category: 'video_audio' as const,
-    resumable: true,
-  },
-  {
-    name: 'Debian CD Image (FTP)',
-    url: 'ftp://ftp.debian.org/debian/dists/stable/main/Contents-amd64.gz',
-    protocol: 'ftp' as const,
-    size: 44200000,
-    category: 'compressed' as const,
-    resumable: true,
-  },
-  {
-    name: 'HLS Live/VOD Stream (.m3u8)',
-    url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-    protocol: 'hls' as const,
-    size: 65000000,
-    category: 'video_audio' as const,
-    resumable: true,
-  },
-  {
-    name: 'Node.js LTS MSI (HTTPS)',
-    url: 'https://nodejs.org/dist/v22.14.0/node-v22.14.0-x64.msi',
-    protocol: 'https' as const,
-    size: 34185216,
-    category: 'applications' as const,
-    resumable: true,
-  },
-  {
-    name: 'Widevine DRM Demo (.mpd)',
-    url: 'https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd',
-    protocol: 'dash' as const,
-    size: 92000000,
-    category: 'video_audio' as const,
-    resumable: false,
-    hasDrm: true,
-  },
-];
-
 export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   isOpen,
   onClose,
   onAddDownload,
   settings,
+  prefill,
   accentClasses,
 }) => {
   const [protocol, setProtocol] = useState<DownloadProtocol>('https');
@@ -145,7 +96,55 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, settings.defaultFolder]);
 
-  const [videoQuality, setVideoQuality] = useState<'best' | '1080' | '720' | '480' | 'audio'>('best');
+  const [videoQuality, setVideoQuality] = useState<string>('best');
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
+  const [videoProbing, setVideoProbing] = useState(false);
+  const [videoError, setVideoError] = useState('');
+
+  // Opened by the browser extension's "Download this video" button
+  useEffect(() => {
+    if (isOpen && prefill && prefill.url) {
+      setUrl(prefill.url);
+      setProtocol('video');
+      setVideoQuality(prefill.quality && prefill.quality !== 'best' ? prefill.quality : 'best');
+      setVideoInfo(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.nonce, isOpen]);
+
+  // Read the list of available resolutions as soon as a video link is present
+  useEffect(() => {
+    if (!isOpen || protocol !== 'video') return;
+    const link = url.trim();
+    if (!/^https?:\/\//i.test(link)) {
+      setVideoInfo(null);
+      setVideoError('');
+      return;
+    }
+    if (!isTauriEnvironment()) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setVideoProbing(true);
+      setVideoError('');
+      try {
+        const info = await probeVideo(link);
+        if (cancelled) return;
+        setVideoInfo(info);
+        // keep an exact choice only if it still exists
+        setVideoQuality((q) => (q.startsWith('fmt:') && !info.formats.some((f) => 'fmt:' + f.id === q) ? 'best' : q));
+      } catch (e: any) {
+        if (cancelled) return;
+        setVideoInfo(null);
+        setVideoError(String(e?.message || e));
+      } finally {
+        if (!cancelled) setVideoProbing(false);
+      }
+    }, 700);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [url, protocol, isOpen]);
 
   // Pages (not direct files) from well-known video sites are handled by the video downloader
   const isVideoSiteUrl = (u: string) => {
@@ -238,25 +237,6 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     } finally {
       setIsProbing(false);
     }
-  };
-
-  const handleApplyPreset = (preset: typeof PRESETS[0]) => {
-    setUrl(preset.url);
-    setProtocol(preset.protocol);
-    const parts = preset.url.split('/');
-    let fname = parts[parts.length - 1];
-    if (fname.includes('?')) fname = fname.split('?')[0];
-    if (preset.protocol === 'hls' && fname.endsWith('.m3u8')) fname = fname.replace(/\.m3u8$/i, '.mp4');
-    if (preset.protocol === 'dash' && fname.endsWith('.mpd')) fname = fname.replace(/\.mpd$/i, '.mp4');
-    
-    setFilename(fname || 'download.dat');
-    setTotalBytes(preset.size);
-    setCategory(preset.category);
-    setSupportsRange(preset.resumable);
-    setIsResumable(preset.resumable);
-
-    // Auto-probe preset to show verified capabilities
-    handleProbe(preset.url);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -362,30 +342,6 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
         {/* Content Form */}
         <form onSubmit={handleSubmit} className="p-4 space-y-4 overflow-y-auto flex-1 text-xs">
-          {/* Quick Presets */}
-          <div>
-            <div className="text-[11px] text-slate-400 font-medium mb-1.5 flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-cyan-400" />
-              <span>Multi-Protocol Presets & Test Links:</span>
-            </div>
-            <div className="grid grid-cols-3 gap-1.5">
-              {PRESETS.map((p) => (
-                <button
-                  key={p.name}
-                  type="button"
-                  onClick={() => handleApplyPreset(p)}
-                  className="px-2 py-1.5 bg-[#0e1117] hover:bg-white/[0.05] border border-white/[0.06] rounded text-left truncate transition-colors group"
-                >
-                  <div className="font-medium text-slate-200 truncate group-hover:text-cyan-300">{p.name}</div>
-                  <div className="text-[10px] text-slate-400 font-mono flex items-center justify-between mt-0.5">
-                    <span>{formatBytes(p.size)}</span>
-                    <span className="uppercase text-[9px] px-1 rounded bg-white/[0.04] text-slate-300">{p.protocol}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
           {/* Protocol Selection Tabs */}
           <div className="flex items-center gap-2 p-1 bg-[#0c0e14] rounded-lg border border-white/[0.06]">
             {[
@@ -619,21 +575,49 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           </div>
 
           {protocol === 'video' && (
-            <div className="bg-[#0d1016] border border-white/[0.08] rounded-lg p-3 space-y-2">
-              <div className="font-semibold text-slate-200 text-xs">Video quality</div>
-              <div className="grid grid-cols-5 gap-2">
-                {([
-                  ['best', 'Best'],
-                  ['1080', '1080p'],
-                  ['720', '720p'],
-                  ['480', '480p'],
-                  ['audio', 'Audio MP3'],
-                ] as const).map(([id, label]) => (
+            <div className="bg-[#0d1016] border border-white/[0.08] rounded-lg p-3 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-slate-200 text-xs">Video quality</div>
+                {videoProbing && (
+                  <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Reading available resolutions...</span>
+                  </div>
+                )}
+              </div>
+
+              {videoInfo && (
+                <div className="flex items-center gap-2.5 p-2 rounded-md bg-white/[0.04] border border-white/[0.06]">
+                  {videoInfo.thumbnail && (
+                    <img src={videoInfo.thumbnail} alt="" className="w-20 h-12 object-cover rounded" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-slate-200 font-medium truncate">{videoInfo.title}</div>
+                    <div className="text-[11px] text-slate-400 truncate">
+                      {videoInfo.uploader}
+                      {videoInfo.duration > 0 && ` · ${Math.floor(videoInfo.duration / 60)}:${String(videoInfo.duration % 60).padStart(2, '0')}`}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {videoError && (
+                <div className="text-[11px] text-rose-400 flex items-start gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>{videoError}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  ['best', 'Best available (highest resolution)'],
+                  ['audio', 'Audio only (MP3)'],
+                ].map(([id, label]) => (
                   <button
                     key={id}
                     type="button"
                     onClick={() => setVideoQuality(id)}
-                    className={`py-1.5 rounded text-[11px] font-mono border transition-colors ${
+                    className={`py-1.5 rounded text-[11px] border transition-colors ${
                       videoQuality === id
                         ? `${accentClasses.bg} text-slate-950 font-bold border-transparent`
                         : 'bg-[#141821] text-slate-300 border-white/[0.08] hover:bg-white/[0.06]'
@@ -643,6 +627,40 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                   </button>
                 ))}
               </div>
+
+              {videoInfo && videoInfo.formats.length > 0 && (
+                <div className="max-h-44 overflow-y-auto rounded-md border border-white/[0.06] divide-y divide-white/[0.04]">
+                  {videoInfo.formats.map((f) => {
+                    const id = 'fmt:' + f.id;
+                    const total = f.size > 0 ? f.size + (f.has_audio ? 0 : videoInfo.best_audio_size) : 0;
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setVideoQuality(id)}
+                        className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left transition-colors ${
+                          videoQuality === id ? 'bg-white/[0.1] text-white' : 'text-slate-300 hover:bg-white/[0.05]'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          <span className="font-bold w-14 shrink-0">{resolutionName(f.height)}</span>
+                          <span className="font-mono">
+                            {f.height}p{f.fps > 30 ? ` ${f.fps}fps` : ''}
+                          </span>
+                          {f.hdr && (
+                            <span className="px-1 rounded bg-amber-500/20 text-amber-300 text-[10px] font-bold">HDR</span>
+                          )}
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-mono shrink-0">
+                          {f.ext.toUpperCase()} · {f.vcodec}
+                          {total > 0 ? ` · ${formatBytes(total)}` : ''}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               <p className="text-[11px] text-slate-400">
                 Single videos only (playlists are skipped). Only download content you have the right to save.
                 Protected (DRM) videos are not supported.

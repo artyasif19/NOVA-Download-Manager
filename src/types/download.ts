@@ -110,6 +110,9 @@ export interface AppSettings {
   autoCategorize: boolean;
   accentColor: 'cyan' | 'emerald' | 'violet' | 'amber' | 'crimson' | 'slate';
   theme: 'dark' | 'light' | 'glass-dark' | 'glass-light';
+  glassStyle: 'default' | 'aurora' | 'sunset' | 'ocean' | 'rose' | 'custom' | 'image';
+  customColors: string[]; // 3 hex colours for the custom gradient
+  customBgImage: string; // data URL of a custom background picture ('' = none)
   density: 'compact' | 'comfortable';
   userAgent: string;
   autoStartNewDownloads: boolean;

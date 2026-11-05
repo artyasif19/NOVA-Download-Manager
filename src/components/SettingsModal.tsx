@@ -372,6 +372,90 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
 
+                {(settings.theme === 'glass-dark' || settings.theme === 'glass-light') && (
+                  <div className="pt-3 border-t border-white/[0.06] space-y-3">
+                    <label className="font-medium text-slate-200 block">Glass Background Style</label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {([
+                        ['default', 'Default', 'linear-gradient(135deg,#06b6d4,#8b5cf6,#f43f5e)'],
+                        ['aurora', 'Aurora', 'linear-gradient(135deg,#10b981,#06b6d4,#6366f1)'],
+                        ['sunset', 'Sunset', 'linear-gradient(135deg,#fb923c,#f43f5e,#a855f7)'],
+                        ['ocean', 'Ocean', 'linear-gradient(135deg,#0ea5e9,#2563eb,#14b8a6)'],
+                        ['rose', 'Rose', 'linear-gradient(135deg,#f472b6,#a855f7,#fbbf24)'],
+                        ['custom', 'Custom colors', `linear-gradient(135deg,${(settings.customColors || [])[0] || '#06b6d4'},${(settings.customColors || [])[1] || '#8b5cf6'},${(settings.customColors || [])[2] || '#f43f5e'})`],
+                        ['image', 'My picture', settings.customBgImage ? `center/cover url("${settings.customBgImage}")` : 'linear-gradient(135deg,#334155,#0f172a)'],
+                      ] as const).map(([id, name, bg]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => onUpdateSettings({ glassStyle: id })}
+                          className={`rounded-lg border p-1.5 text-center text-[11px] transition-all ${
+                            (settings.glassStyle || 'default') === id
+                              ? 'border-white/40 bg-white/[0.08] text-white'
+                              : 'border-white/[0.06] bg-white/[0.02] text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          <div className="h-8 rounded mb-1" style={{ background: bg }} />
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+
+                    {(settings.glassStyle === 'custom') && (
+                      <div className="flex items-center gap-3">
+                        {[0, 1, 2].map((i) => (
+                          <label key={i} className="flex items-center gap-1.5 text-slate-300">
+                            Color {i + 1}
+                            <input
+                              type="color"
+                              value={(settings.customColors || [])[i] || '#06b6d4'}
+                              onChange={(e) => {
+                                const next = [...(settings.customColors || ['#06b6d4', '#8b5cf6', '#f43f5e'])];
+                                next[i] = e.target.value;
+                                onUpdateSettings({ customColors: next });
+                              }}
+                              className="w-8 h-6 bg-transparent border border-white/20 rounded cursor-pointer"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    {(settings.glassStyle === 'image') && (
+                      <div className="flex items-center gap-2">
+                        <label className="px-3 py-1.5 rounded bg-white/[0.08] hover:bg-white/[0.15] text-slate-200 cursor-pointer">
+                          Choose picture...
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files && e.target.files[0];
+                              if (!file) return;
+                              if (file.size > 3 * 1024 * 1024) {
+                                alert('Please choose a picture smaller than 3 MB.');
+                                return;
+                              }
+                              const reader = new FileReader();
+                              reader.onload = () => onUpdateSettings({ customBgImage: String(reader.result || ''), glassStyle: 'image' });
+                              reader.readAsDataURL(file);
+                            }}
+                          />
+                        </label>
+                        {settings.customBgImage && (
+                          <button
+                            type="button"
+                            onClick={() => onUpdateSettings({ customBgImage: '', glassStyle: 'default' })}
+                            className="px-3 py-1.5 rounded border border-white/[0.12] text-slate-300 hover:bg-white/[0.06]"
+                          >
+                            Remove picture
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="pt-3 border-t border-white/[0.06]">
                   <label className="font-medium text-slate-200 block mb-2">
                     System Accent Color Theme
