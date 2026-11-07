@@ -40,6 +40,24 @@ interface VideoSnifferLabProps {
 
 const SPEEDS = [0.25, 0.5, 1, 1.25, 1.5, 2, 4, 8, 10, 16];
 
+/** YouTube video id from a watch / short / embed link (used for the in-app preview) */
+function youTubeId(link: string): string | null {
+  try {
+    const u = new URL(link.trim());
+    const h = u.hostname.toLowerCase();
+    if (h === 'youtu.be') return u.pathname.split('/').filter(Boolean)[0] || null;
+    if (h.endsWith('youtube.com') || h.endsWith('youtube-nocookie.com')) {
+      const v = u.searchParams.get('v');
+      if (v) return v;
+      const m = u.pathname.match(/^\/(shorts|embed|live)\/([\w-]{6,})/);
+      if (m) return m[2];
+    }
+  } catch {
+    /* not a valid link */
+  }
+  return null;
+}
+
 function fmtTime(sec: number): string {
   if (!isFinite(sec) || sec < 0) sec = 0;
   const h = Math.floor(sec / 3600);
@@ -338,11 +356,21 @@ export const VideoSnifferLab: React.FC<VideoSnifferLabProps> = ({ settings, onAd
                       </div>
                     </div>
                   </>
+                ) : youTubeId(link) ? (
+                  <div className="aspect-video w-full bg-black">
+                    <iframe
+                      title="Video preview"
+                      src={`https://www.youtube-nocookie.com/embed/${youTubeId(link)}?rel=0&modestbranding=1`}
+                      className="w-full h-full border-0"
+                      allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+                      allowFullScreen
+                    />
+                  </div>
                 ) : (
-                  <div className="relative">
-                    {info.thumbnail && <img src={info.thumbnail} alt="" className="w-full max-h-[50vh] object-cover opacity-60" />}
-                    <div className="absolute inset-0 flex items-center justify-center text-slate-200 text-center px-6">
-                      No in-app preview is available for this video, but you can still download it in any resolution.
+                  <div className="relative bg-black">
+                    {info.thumbnail && <img src={info.thumbnail} alt="" className="w-full max-h-[50vh] object-contain" />}
+                    <div className="absolute bottom-0 inset-x-0 p-2 text-center text-[11px] text-slate-200 bg-black/60">
+                      No in-app preview for this site. You can still download it in any resolution.
                     </div>
                   </div>
                 )}
@@ -394,7 +422,7 @@ export const VideoSnifferLab: React.FC<VideoSnifferLabProps> = ({ settings, onAd
                     </span>
                     <span className="text-[11px] text-slate-400 font-mono shrink-0">
                       {f.ext.toUpperCase()} · {f.vcodec}
-                      {total > 0 ? ` · ${formatBytes(total)}` : ''}
+                      {total > 0 ? ` · ${f.size_estimated || (!f.has_audio && info.best_audio_size > 0) ? '~' : ''}${formatBytes(total)}` : ''}
                     </span>
                   </button>
                 );

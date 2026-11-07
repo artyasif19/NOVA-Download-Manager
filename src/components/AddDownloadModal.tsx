@@ -653,7 +653,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                         </span>
                         <span className="text-[11px] text-slate-400 font-mono shrink-0">
                           {f.ext.toUpperCase()} · {f.vcodec}
-                          {total > 0 ? ` · ${formatBytes(total)}` : ''}
+                          {total > 0 ? ` · ${f.size_estimated || (!f.has_audio && videoInfo.best_audio_size > 0) ? '~' : ''}${formatBytes(total)}` : ''}
                         </span>
                       </button>
                     );

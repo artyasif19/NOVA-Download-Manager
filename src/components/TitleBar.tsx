@@ -62,9 +62,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
     <header data-tauri-drag-region className="h-10 bg-[#0c0e12] border-b border-white/[0.07] flex items-center justify-between px-3 select-none shrink-0 z-50">
       {/* App Branding & Window Identifier */}
       <div className="flex items-center gap-2.5 min-w-[240px]">
-        <div className={`w-6 h-6 rounded-md ${accentClasses.bg} flex items-center justify-center shadow-sm shadow-black/40`}>
-          <Download className="w-3.5 h-3.5 text-slate-950 stroke-[2.5]" />
-        </div>
+        <img src="/nova-logo.png" alt="NOVA" className="w-6 h-6 rounded-md shadow-sm shadow-black/40" draggable={false} />
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold tracking-wide text-slate-100">
             NOVA

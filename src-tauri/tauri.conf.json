@@ -44,13 +44,18 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "",
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp"
       }
     },
     "resources": [
       "binaries/*",
       "ext-chrome/*",
       "ext-firefox/*"
-    ]
+    ],
+    "publisher": "NOVA",
+    "shortDescription": "NOVA Download Manager"
   }
 }

@@ -21,19 +21,16 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.storage.local.set({ enableFloatingSniffer: e.target.checked });
   });
 
-  // Test native connection
-  try {
-    chrome.runtime.sendNativeMessage("com.nova.downloadmanager", { action: "ping" }, (response) => {
-      if (chrome.runtime.lastError) {
-        hostStatusEl.textContent = "Offline";
-        hostStatusEl.style.color = "#f43f5e";
-        hostStatusEl.style.borderColor = "rgba(244, 63, 94, 0.3)";
-        hostStatusEl.style.background = "rgba(244, 63, 94, 0.15)";
-      } else {
-        hostStatusEl.textContent = "Active";
-      }
-    });
-  } catch {
-    hostStatusEl.textContent = "Standby";
-  }
+  // Check the connection to the NOVA desktop app
+  chrome.runtime.sendMessage({ action: "check_native_status" }, (res) => {
+    const connected = !chrome.runtime.lastError && res && res.status && res.status.connected;
+    if (connected) {
+      hostStatusEl.textContent = "Connected";
+    } else {
+      hostStatusEl.textContent = "NOVA not running";
+      hostStatusEl.style.color = "#f43f5e";
+      hostStatusEl.style.borderColor = "rgba(244, 63, 94, 0.3)";
+      hostStatusEl.style.background = "rgba(244, 63, 94, 0.15)";
+    }
+  });
 });

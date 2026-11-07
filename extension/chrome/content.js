@@ -87,7 +87,12 @@
         button:hover { background: rgba(255,255,255,.22); }
         .icon-btn { padding: 6px 8px; }
         .mini { width: 34px; height: 34px; padding: 0; justify-content: center; }
-        .menu { padding: 5px; border-radius: 16px; flex-direction: column; align-items: stretch; gap: 1px; min-width: 150px; }
+        .menu { padding: 5px; border-radius: 16px; flex-direction: column; align-items: stretch; gap: 1px; min-width: 300px; max-height: 340px; overflow-y: auto; }
+        .menu button { justify-content: space-between; gap: 14px; }
+        .menu .head { font-size: 10px; opacity: .75; padding: 5px 10px 2px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+        .menu .meta { font-size: 10px; opacity: .85; font-weight: 500; white-space: nowrap; }
+        .menu .busy { padding: 6px 10px; font-size: 11px; opacity: .85; font-weight: 500; }
+        .hdr { margin-left: 5px; padding: 0 4px; border-radius: 4px; background: rgba(251,191,36,.35); font-size: 9px; }
         .menu button { border-radius: 11px; font-weight: 500; }
         .menu button.sel { background: rgba(255,255,255,.28); }
         .note { padding: 6px 12px; border-radius: 12px; font-size: 11px; font-weight: 500; max-width: 230px; }
@@ -129,21 +134,69 @@
       clearTimeout(noteTimer);
       noteTimer = setTimeout(() => note.classList.add("hidden"), 3500);
     }
+    // ---- resolution list (read through NOVA's video engine) ----
+    const resName = (h) => (h >= 4320 ? "8K" : h >= 2160 ? "4K" : h >= 1440 ? "2K" : h >= 1080 ? "Full HD" : h >= 720 ? "HD" : "SD");
+    const fmtSize = (n, est) => {
+      if (!n || n <= 0) return "";
+      const txt = n >= 1073741824 ? (n / 1073741824).toFixed(2) + " GB" : (n / 1048576).toFixed(n >= 104857600 ? 0 : 1) + " MB";
+      return (est ? "~" : "") + txt;
+    };
+    let cache = { url: "", info: null, loading: false, error: "" };
+    function loadInfo() {
+      if (!isVideoSitePage() || !/^https?:/i.test(location.href)) return;
+      if (cache.url === location.href && (cache.info || cache.loading)) return;
+      cache = { url: location.href, info: null, loading: true, error: "" };
+      chrome.runtime.sendMessage({ action: "video_info", url: location.href }, (res) => {
+        cache.loading = false;
+        if (chrome.runtime.lastError || !res) cache.error = "NOVA is not running. Open NOVA and try again.";
+        else if (res.status === "success" && res.data && res.data.formats) cache.info = res.data;
+        else if (res.error === "NOVA_ENGINE_NOT_RUNNING") cache.error = "NOVA is not running. Open NOVA and try again.";
+        else cache.error = (res.data && res.data.error) || res.error || "Could not read the available resolutions.";
+        if (state.menuOpen) renderMenu();
+      });
+    }
+    function addItem(label, meta, selected, onPick, hdr) {
+      const b = document.createElement("button");
+      const l = document.createElement("span");
+      l.textContent = label;
+      if (hdr) { const h = document.createElement("span"); h.className = "hdr"; h.textContent = "HDR"; l.appendChild(h); }
+      b.appendChild(l);
+      if (meta) { const m = document.createElement("span"); m.className = "meta"; m.textContent = meta; b.appendChild(m); }
+      if (selected) b.className = "sel";
+      b.addEventListener("click", (e) => { e.stopPropagation(); onPick(); });
+      menu.appendChild(b);
+    }
+    function addHead(text) { const d = document.createElement("div"); d.className = "head"; d.textContent = text; menu.appendChild(d); }
     function renderMenu() {
       menu.innerHTML = "";
       QUALITIES.forEach(([id, label]) => {
-        const b = document.createElement("button");
-        b.textContent = label;
-        if (id === state.quality) b.className = "sel";
-        b.addEventListener("click", (e) => {
-          e.stopPropagation();
+        addItem(label, "", id === state.quality, () => {
           state.quality = id;
           chrome.storage.local.set({ novaGrabberQuality: id });
           closeMenu();
           send();
         });
-        menu.appendChild(b);
       });
+      if (!isVideoSitePage()) return;
+      addHead("All resolutions (lowest to highest)");
+      if (cache.loading) {
+        const d = document.createElement("div"); d.className = "busy"; d.textContent = "Reading available resolutions..."; menu.appendChild(d);
+      } else if (cache.error) {
+        const d = document.createElement("div"); d.className = "busy"; d.textContent = cache.error; menu.appendChild(d);
+      } else if (cache.info) {
+        const audio = cache.info.best_audio_size || 0;
+        cache.info.formats.forEach((f) => {
+          const total = f.size > 0 ? f.size + (f.has_audio ? 0 : audio) : 0;
+          const label = resName(f.height) + "  " + f.height + "p" + (f.fps > 30 ? " " + f.fps + "fps" : "");
+          const meta = (f.ext || "").toUpperCase() + " · " + f.vcodec + (total ? " · " + fmtSize(total, f.size_estimated) : "");
+          const id = "fmt:" + f.id;
+          addItem(label, meta, state.quality === id, () => {
+            state.quality = id; // exact choice, only used for this download
+            closeMenu();
+            send();
+          }, f.hdr);
+        });
+      }
     }
 
     $("min").addEventListener("click", () => {
@@ -158,7 +211,7 @@
     });
     $("qual").addEventListener("click", () => {
       state.menuOpen = !state.menuOpen;
-      if (state.menuOpen) { renderMenu(); menu.classList.remove("hidden"); } else closeMenu();
+      if (state.menuOpen) { loadInfo(); renderMenu(); menu.classList.remove("hidden"); } else closeMenu();
     });
     $("main").addEventListener("click", () => send());
 
@@ -193,8 +246,9 @@
     function onReply(res) {
       if (chrome.runtime.lastError || !res) { say("NOVA is not running. Open NOVA and try again.", true); return; }
       const ok = res.accepted === true || res.status === "accepted" || res.status === "success";
-      if (ok) say("Sent to NOVA Download Manager");
-      else say(res.error === "NOVA_ENGINE_NOT_RUNNING" ? "NOVA is not running. Open NOVA and try again." : "NOVA could not start this download.", true);
+      if (ok) say("Sent to NOVA - confirm the download in the NOVA window");
+      else if (res.error === "NOVA_ENGINE_NOT_RUNNING") say("NOVA is not running. Open NOVA and try again.", true);
+      else say("NOVA could not start this download" + (res.error ? " (" + String(res.error).slice(0, 90) + ")" : "."), true);
     }
 
     // ---- choose the video to attach to and keep the widget positioned over it ----

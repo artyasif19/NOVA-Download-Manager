@@ -544,6 +544,7 @@ pub struct VideoFormat {
     pub ext: String,
     pub vcodec: String,
     pub size: u64,
+    pub size_estimated: bool,
     pub has_audio: bool,
 }
 
@@ -581,11 +582,16 @@ fn short_codec(vcodec: &str) -> String {
 /// Lists every resolution a video offers (lowest to highest), with fps / HDR / size.
 #[tauri::command]
 pub async fn probe_video(app: AppHandle, url: String) -> Result<VideoInfo, String> {
+    probe_video_inner(&app, url).await
+}
+
+/// Same as `probe_video`, usable from the local browser-extension service too.
+pub async fn probe_video_inner(app: &AppHandle, url: String) -> Result<VideoInfo, String> {
     let url = url.trim().to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Please enter a full link starting with http:// or https://".to_string());
     }
-    let ytdlp = find_tool(&app, "yt-dlp.exe")
+    let ytdlp = find_tool(app, "yt-dlp.exe")
         .ok_or_else(|| "Video downloader component (yt-dlp.exe) was not found. Please reinstall NOVA.".to_string())?;
 
     let mut cmd = tokio::process::Command::new(&ytdlp);
@@ -631,6 +637,8 @@ pub async fn probe_video(app: AppHandle, url: String) -> Result<VideoInfo, Strin
         .cloned()
         .unwrap_or_default();
 
+    let duration_total = as_u64(root.get("duration").unwrap_or(&serde_json::Value::Null));
+
     // One entry per (height, fps, hdr): keep the best (largest bitrate) stream of each
     let mut best: HashMap<(u32, u32, bool), (f64, VideoFormat)> = HashMap::new();
     let mut best_audio: u64 = 0;
@@ -641,8 +649,17 @@ pub async fn probe_video(app: AppHandle, url: String) -> Result<VideoInfo, Strin
         let acodec = f.get("acodec").and_then(|v| v.as_str()).unwrap_or("none");
         let has_video = vcodec != "none";
         let has_audio = acodec != "none";
-        let size = as_u64(f.get("filesize").unwrap_or(&serde_json::Value::Null))
+        let mut size = as_u64(f.get("filesize").unwrap_or(&serde_json::Value::Null))
             .max(as_u64(f.get("filesize_approx").unwrap_or(&serde_json::Value::Null)));
+        let mut size_estimated = false;
+        if size == 0 {
+            // YouTube rarely reports exact sizes: estimate from bitrate x duration
+            let tbr_est = f.get("tbr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            if tbr_est > 0.0 && duration_total > 0 {
+                size = (tbr_est * 1000.0 / 8.0 * duration_total as f64) as u64;
+                size_estimated = true;
+            }
+        }
 
         if !has_video && has_audio {
             best_audio = best_audio.max(size);
@@ -685,9 +702,11 @@ pub async fn probe_video(app: AppHandle, url: String) -> Result<VideoInfo, Strin
             ext,
             vcodec: short_codec(vcodec),
             size,
+            size_estimated,
             has_audio,
         };
-        let key = (height, fps, hdr);
+        let fps_key = if fps >= 50 { 60 } else if fps >= 24 { 30 } else { fps };
+        let key = (height, fps_key, hdr);
         let replace = match best.get(&key) {
             Some((old_tbr, _)) => tbr > *old_tbr,
             None => true,

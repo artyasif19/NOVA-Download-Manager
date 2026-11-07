@@ -1,11 +1,78 @@
 /**
  * NOVA Download Manager - Chrome / Edge / Brave Manifest V3 Service Worker
- * Handles download interception, context menu, and native messaging bridge
+ * Handles download interception, context menu and the connection to the NOVA desktop app.
+ *
+ * Connection: the extension talks directly to NOVA on this PC (127.0.0.1:9654). No extra
+ * helper program or registry entry is needed. Native messaging is only kept as a fallback.
  */
 
 const NATIVE_HOST_NAME = "com.nova.downloadmanager";
+const NOVA_PORT = 9654;
 const RECENT_DOWNLOADS_CACHE = new Map(); // url -> timestamp (prevent duplicate loops)
 const DUP_TIMEOUT_MS = 10000;
+
+const ENDPOINTS = {
+  ping: "ping",
+  can_handle: "can_handle",
+  video_info: "video_info",
+  add_download: "downloads"
+};
+
+async function novaHttp(message, timeoutMs) {
+  const ep = ENDPOINTS[message.action] || message.action;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch("http://127.0.0.1:" + NOVA_PORT + "/api/" + ep, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(message),
+      signal: ctl.signal
+    });
+    let data = {};
+    try { data = await res.json(); } catch (e) { /* empty body */ }
+    return { reachable: true, httpOk: res.ok, data };
+  } catch (e) {
+    return { reachable: false, error: String(e) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Sends a message to NOVA and always resolves with a host-style response object. */
+async function novaSend(message, timeoutMs = 6000) {
+  const r = await novaHttp(message, timeoutMs);
+  if (r.reachable) {
+    const d = r.data || {};
+    if (message.action === "ping") {
+      return { status: "online", accepted: true, data: d, error: null };
+    }
+    if (message.action === "video_info") {
+      return { status: r.httpOk ? "success" : "error", accepted: r.httpOk, data: d, error: d.error || null };
+    }
+    const accepted = d.accepted === true;
+    return {
+      status: accepted ? "accepted" : "rejected",
+      accepted,
+      data: d,
+      error: accepted ? null : (d.reason || d.error || "NOVA declined this download")
+    };
+  }
+  // NOVA not reachable over HTTP: try the native messaging helper as a fallback
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, message, (response) => {
+        if (chrome.runtime.lastError || !response) {
+          resolve({ status: "offline", accepted: false, error: "NOVA_ENGINE_NOT_RUNNING", detail: r.error });
+        } else {
+          resolve(response);
+        }
+      });
+    } catch (e) {
+      resolve({ status: "offline", accepted: false, error: "NOVA_ENGINE_NOT_RUNNING", detail: r.error });
+    }
+  });
+}
 
 // Create context menus upon installation
 chrome.runtime.onInstalled.addListener(() => {
@@ -41,7 +108,6 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       });
     }
   } else if (info.menuItemId === "nova-download-all-links" && tab?.id) {
-    // Send message to content script to gather all links
     chrome.tabs.sendMessage(tab.id, { action: "gather_all_page_links" }, (response) => {
       if (response && response.links && response.links.length > 0) {
         response.links.forEach(linkUrl => {
@@ -55,46 +121,32 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 // Safe protocol allowlist for download interception
 const SUPPORTED_PROTOCOLS = new Set(["http:", "https:", "ftp:", "ftps:", "sftp:"]);
 
-// Intercept browser downloads ONLY if user explicitly enabled automatic interception AND handoff verification has passed
+// Intercept browser downloads (on by default, can be switched off in the extension popup)
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
   const { autoIntercept } = await chrome.storage.local.get(["autoIntercept"]);
-  // On by default (like IDM). The browser download is only cancelled after NOVA accepts it.
   if (autoIntercept === false) return;
 
   const url = downloadItem.url;
   if (!url) return;
 
-  // Validate protocol: never intercept internal, blob, data, or file schemes
+  // Never intercept internal, blob, data or file schemes
   let parsedUrl;
   try {
     parsedUrl = new URL(url);
   } catch {
     return;
   }
+  if (!SUPPORTED_PROTOCOLS.has(parsedUrl.protocol)) return;
 
-  if (!SUPPORTED_PROTOCOLS.has(parsedUrl.protocol)) {
-    return;
-  }
-
-  // Check exclusion list
   const { excludedDomains } = await chrome.storage.local.get("excludedDomains");
-  if (excludedDomains && excludedDomains.some(d => parsedUrl.hostname.includes(d))) {
-    return;
-  }
+  if (excludedDomains && excludedDomains.some(d => parsedUrl.hostname.includes(d))) return;
 
-  // Duplicate prevention check (avoids intercepting downloads triggered by NOVA itself)
+  // Duplicate prevention (avoids loops for downloads started by NOVA itself)
   const now = Date.now();
   if (RECENT_DOWNLOADS_CACHE.has(url)) {
     const prev = RECENT_DOWNLOADS_CACHE.get(url);
-    if (now - prev < DUP_TIMEOUT_MS) {
-      return;
-    }
+    if (now - prev < DUP_TIMEOUT_MS) return;
   }
-
-  // IMPORTANT: CRITICAL HANDOFF PROTOCOL TO PREVENT DOWNLOAD LOSS
-  // Do NOT cancel the browser download here!
-  // First, verify that the NOVA native host is running and explicitly ACCEPTS the download.
-  // If the host is unavailable, encounters an error, or declines, leave the browser download untouched.
   RECENT_DOWNLOADS_CACHE.set(url, now);
 
   const handoffPayload = {
@@ -108,38 +160,20 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     timestamp: now
   };
 
-  try {
-    chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, handoffPayload, (response) => {
-      if (chrome.runtime.lastError) {
-        // Native host is not running, not registered, or disconnected.
-        // PRESERVE BROWSER DOWNLOAD: Do NOT cancel the browser download!
-        console.warn(
-          "[NOVA Extension] Native host unavailable (" + chrome.runtime.lastError.message +
-          "). Allowing browser download to proceed safely without loss."
-        );
-        return;
-      }
-
-      // Check if NOVA explicitly accepted the download
-      if (response && (response.accepted === true || response.status === "accepted")) {
-        console.log("[NOVA Extension] Download accepted by NOVA host. Cancelling browser download:", downloadItem.id);
-        // Only cancel browser download AFTER confirmation that NOVA has queued it
-        chrome.downloads.cancel(downloadItem.id, () => {
-          if (!chrome.runtime.lastError) {
-            chrome.downloads.erase({ id: downloadItem.id });
-          }
-        });
-      } else {
-        // NOVA host responded but declined or could not accept
-        console.log("[NOVA Extension] Host rejected or deferred handoff. Preserving browser download:", response);
+  // The browser download is only cancelled AFTER NOVA has accepted it, so nothing is ever lost.
+  const response = await novaSend(handoffPayload);
+  if (response && (response.accepted === true || response.status === "accepted")) {
+    chrome.downloads.cancel(downloadItem.id, () => {
+      if (!chrome.runtime.lastError) {
+        chrome.downloads.erase({ id: downloadItem.id });
       }
     });
-  } catch (err) {
-    console.warn("[NOVA Extension] Failed to send native message. Preserving browser download:", err);
+  } else {
+    console.log("[NOVA Extension] NOVA did not take this download, keeping the browser download:", response);
   }
 });
 
-// Handle messages from content scripts
+// Messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "send_to_nova") {
     sendDownloadToNova({
@@ -148,79 +182,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       referrer: sender.tab?.url,
       category: "video_audio",
       headers: message.headers,
-    }, (result) => {
-      sendResponse(result);
-    });
-    return true; // Keep message channel open for async response
+    }, (result) => sendResponse(result));
+    return true;
   } else if (message.action === "send_video_page") {
     // A page link from a video site (YouTube etc.): NOVA's video downloader takes over
-    try {
-      chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
-        action: "can_handle",
-        url: message.url,
-        video: true,
-        quality: message.quality || "best",
-        client: "chromium-extension",
-        timestamp: Date.now()
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          sendResponse({ status: "error", error: chrome.runtime.lastError.message });
-        } else {
-          sendResponse(response);
-        }
-      });
-    } catch (err) {
-      sendResponse({ status: "error", error: String(err) });
-    }
+    novaSend({
+      action: "can_handle",
+      url: message.url,
+      video: true,
+      quality: message.quality || "best",
+      client: "chromium-extension",
+      timestamp: Date.now()
+    }).then(sendResponse);
+    return true;
+  } else if (message.action === "video_info") {
+    // Resolution list (size, codec, fps, HDR) for the floating button's menu
+    novaSend({ action: "video_info", url: message.url }, 90000).then(sendResponse);
     return true;
   } else if (message.action === "check_native_status") {
-    pingNativeHost((status) => {
-      sendResponse({ status });
+    novaSend({ action: "ping" }, 3000).then((r) => {
+      sendResponse({ status: { connected: r && r.accepted === true, response: r, error: r && r.error } });
     });
-    return true; // async sendResponse
+    return true;
   }
 });
 
-// Send message to Windows Native Messaging Host with callback
 function sendDownloadToNova(details, callback) {
   const message = {
     action: "can_handle",
     url: details.url,
     filename: details.filename || extractFilename(details.url),
+    referrer: details.referrer,
     headers: details.referrer ? { "Referer": details.referrer, ...(details.headers || {}) } : details.headers,
     category: details.category || "documents",
     client: "chromium-extension",
     timestamp: Date.now()
   };
-
-  try {
-    chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, message, (response) => {
-      if (chrome.runtime.lastError) {
-        console.warn("[NOVA Extension] Native Host error:", chrome.runtime.lastError.message);
-        if (callback) callback({ status: "error", error: chrome.runtime.lastError.message });
-      } else {
-        console.log("[NOVA Extension] NOVA host response:", response);
-        if (callback) callback(response);
-      }
-    });
-  } catch (err) {
-    console.error("[NOVA Extension] Connection failure:", err);
-    if (callback) callback({ status: "error", error: String(err) });
-  }
-}
-
-function pingNativeHost(callback) {
-  try {
-    chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, { action: "ping" }, (response) => {
-      if (chrome.runtime.lastError) {
-        callback({ connected: false, error: chrome.runtime.lastError.message });
-      } else {
-        callback({ connected: true, response });
-      }
-    });
-  } catch (e) {
-    callback({ connected: false, error: String(e) });
-  }
+  novaSend(message).then((response) => {
+    if (callback) callback(response);
+  });
 }
 
 function extractFilename(url) {

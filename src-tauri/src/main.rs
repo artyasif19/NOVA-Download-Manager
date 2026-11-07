@@ -264,9 +264,25 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
                     }
                 };
 
+                // Requests made by the NOVA browser extension itself (its Origin header cannot be
+                // forged by web pages) may talk to the engine without the token. Every download
+                // they start still needs the user's confirmation inside NOVA.
+                let origin_ok = headers_str.lines().any(|l| {
+                    let l = l.trim().to_lowercase();
+                    l.starts_with("origin:")
+                        && (l.contains("chrome-extension://pmkbechehklelnopohiefbcafghkjjil")
+                            || l.contains("moz-extension://"))
+                });
+
+                if method_line.starts_with("OPTIONS ") {
+                    let resp = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nContent-Length: 0\r\n\r\n";
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
                 // Verify Bearer token
                 let auth_header = format!("Authorization: Bearer {}", expected_token);
-                if !headers_str.contains(&auth_header) {
+                if !origin_ok && !headers_str.contains(&auth_header) {
                     let resp = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 26\r\n\r\n{\"error\":\"Unauthorized\"}";
                     let _ = socket.write_all(resp.as_bytes()).await;
                     return;
@@ -451,6 +467,22 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
                     let resp = format!(
                         "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                         status_line, resp_body.len(), resp_body
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                } else if method_line.starts_with("POST /api/video_info") {
+                    let link = serde_json::from_slice::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(|s| s.to_string()));
+                    let (code, payload) = match (link, video_mgr.app_handle()) {
+                        (Some(u), Some(app)) => match video::probe_video_inner(&app, u).await {
+                            Ok(info) => ("200 OK", serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string())),
+                            Err(e) => ("422 Unprocessable Entity", serde_json::json!({ "error": e }).to_string()),
+                        },
+                        _ => ("400 Bad Request", serde_json::json!({ "error": "Missing link, or NOVA is still starting" }).to_string()),
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        code, payload.len(), payload
                     );
                     let _ = socket.write_all(resp.as_bytes()).await;
                 } else if method_line.starts_with("POST /api/downloads") {

@@ -107,6 +107,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
           Copy-Item 'src-tauri/target/release/bundle/nsis/*.exe' release-artifacts/ -ErrorAction SilentlyContinue
+          Copy-Item 'release/NOVA-README.txt' release-artifacts/ -ErrorAction SilentlyContinue
           if (-not (Get-ChildItem release-artifacts -File)) {
             throw 'No installer was produced.'
           }

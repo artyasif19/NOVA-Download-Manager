@@ -324,6 +324,7 @@ export interface VideoFormatInfo {
   ext: string;
   vcodec: string;
   size: number;
+  size_estimated: boolean;
   has_audio: boolean;
 }
 
