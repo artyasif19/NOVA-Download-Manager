@@ -16,13 +16,13 @@ const CHROME_EXTENSION_ID: &str = "pmkbechehklelnopohiefbcafghkjjil";
 const FIREFOX_EXTENSION_ID: &str = "extension@nova-download-manager.local";
 
 #[cfg(windows)]
-fn hide_window(cmd: &mut Command) {
+pub fn hide_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 }
 
 #[cfg(not(windows))]
-fn hide_window(_cmd: &mut Command) {}
+pub fn hide_window(_cmd: &mut Command) {}
 
 pub fn nova_dir() -> PathBuf {
     std::env::var("LOCALAPPDATA")
@@ -179,6 +179,8 @@ pub fn ensure_native_host(app: &AppHandle) -> Result<(), String> {
         &format!(r"HKCU\Software\Mozilla\NativeMessagingHosts\{}", HOST_NAME),
         &firefox_path,
     );
+
+    register_link_handlers();
     Ok(())
 }
 
@@ -257,4 +259,59 @@ pub fn bring_to_front(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+}
+
+fn reg_set_value(key: &str, name: &str, value: &str) {
+    let mut cmd = Command::new("reg");
+    cmd.args(["add", key, "/v", name, "/t", "REG_SZ", "/d", value, "/f"]);
+    hide_window(&mut cmd);
+    let _ = cmd.output();
+}
+
+/// Lets Windows offer NOVA for magnet: links and .torrent files ("Open with" / default apps).
+fn register_link_handlers() {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+    let open_cmd = format!("\"{}\" \"%1\"", exe);
+
+    let magnet = r"HKCU\Software\Classes\magnet";
+    reg_set_default(magnet, "URL:Magnet Link");
+    reg_set_value(magnet, "URL Protocol", "");
+    reg_set_default(&format!(r"{}\shell\open\command", magnet), &open_cmd);
+
+    let prog = r"HKCU\Software\Classes\NOVA.Torrent";
+    reg_set_default(prog, "BitTorrent file");
+    reg_set_default(&format!(r"{}\shell\open\command", prog), &open_cmd);
+    reg_set_value(r"HKCU\Software\Classes\.torrent\OpenWithProgids", "NOVA.Torrent", "");
+}
+
+/// Sends a magnet link / .torrent path to an already running NOVA. Returns true when it was taken.
+pub fn forward_link_to_running_instance(link: &str) -> bool {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let try_forward = || -> Option<bool> {
+        let content = std::fs::read_to_string(nova_dir().join("session.auth")).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+        let port = v.get("port")?.as_u64()? as u16;
+        let token = v.get("token")?.as_str()?.to_string();
+        let body = serde_json::json!({ "url": link }).to_string();
+        let mut stream =
+            TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(800)).ok()?;
+        stream.set_read_timeout(Some(Duration::from_millis(1500))).ok()?;
+        let req = format!(
+            "POST /api/open_link HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            token,
+            body.len(),
+            body
+        );
+        stream.write_all(req.as_bytes()).ok()?;
+        let mut resp = String::new();
+        let _ = stream.read_to_string(&mut resp);
+        Some(resp.contains(" 200 "))
+    };
+    try_forward().unwrap_or(false)
 }

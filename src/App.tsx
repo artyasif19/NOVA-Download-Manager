@@ -13,6 +13,7 @@ import { DownloadDetailsModal } from './components/DownloadDetailsModal';
 import { VideoSnifferLab } from './components/VideoSnifferLab';
 import { SpeedTest } from './components/SpeedTest';
 import { DownloadConfirmModal, ExtensionDownloadRequest } from './components/DownloadConfirmModal';
+import { BatchDownloadModal } from './components/BatchDownloadModal';
 import { BrowserExtensionHub } from './components/BrowserExtensionHub';
 import { SettingsModal } from './components/SettingsModal';
 import { ScheduleModal } from './components/ScheduleModal';
@@ -33,7 +34,7 @@ import {
 } from './services/storage';
 import { getAccentClasses, formatScheduledDateTime } from './utils/formatters';
 import { startRealDownload, pauseRealDownload, cancelRealDownload } from './services/realDownloader';
-import { fetchAllDownloads, getNativeDefaultFolder, invokeCommand, isTauriEnvironment, setAutostart, setupNativeDownloadListeners } from './services/tauriBridge';
+import { classifyLink, readClipboardText, fetchAllDownloads, getNativeDefaultFolder, invokeCommand, isTauriEnvironment, setAutostart, setupNativeDownloadListeners } from './services/tauriBridge';
 import { listen } from '@tauri-apps/api/event';
 
 export default function App() {
@@ -50,6 +51,19 @@ export default function App() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [videoPrefill, setVideoPrefill] = useState<{ url: string; quality?: string; nonce: number } | null>(null);
   const [extRequest, setExtRequest] = useState<ExtensionDownloadRequest | null>(null);
+  const [isBatchOpen, setIsBatchOpen] = useState(false);
+  const [clipOffer, setClipOffer] = useState<{ url: string; kind: string } | null>(null);
+  const [powerCountdown, setPowerCountdown] = useState<{ action: string; left: number } | null>(null);
+  const lastClipRef = useRef<string | null>(null);
+  const dismissedClipsRef = useRef<Set<string>>(new Set());
+  const addOpenRef = useRef(false);
+  const armedRef = useRef(false);
+
+  // Opens Add Download with a link (copied link, magnet: handler, second NOVA launch)
+  const openAddWithLink = (url: string) => {
+    setVideoPrefill({ url, nonce: Date.now() });
+    setIsAddModalOpen(true);
+  };
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
@@ -84,12 +98,20 @@ export default function App() {
           setVideoPrefill({ url: e.payload.url, quality: e.payload.quality, nonce: Date.now() });
           setIsAddModalOpen(true);
         });
+        const c = await listen<{ url: string }>('open-link', (e) => openAddWithLink(e.payload.url));
         if (disposed) {
           a();
           b();
+          c();
         } else {
-          unlisteners.push(a, b);
+          unlisteners.push(a, b, c);
         }
+        // magnet link or .torrent file NOVA was started with
+        invokeCommand<string | null>('take_initial_link')
+          .then((link) => {
+            if (link) openAddWithLink(link);
+          })
+          .catch(() => {});
       } catch (err) {
         console.warn('Extension event listeners failed:', err);
       }
@@ -99,6 +121,89 @@ export default function App() {
       unlisteners.forEach((u) => u());
     };
   }, []);
+
+  // Send network / behaviour settings to the engine
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    invokeCommand('set_network_config', {
+      config: {
+        mode: settings.proxyMode,
+        host: settings.proxyHost,
+        port: Number(settings.proxyPort) || 0,
+        username: settings.proxyUser,
+        password: settings.proxyPass,
+      },
+    }).catch(() => {});
+  }, [settings.proxyMode, settings.proxyHost, settings.proxyPort, settings.proxyUser, settings.proxyPass]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    invokeCommand('set_max_concurrent', { value: settings.maxConcurrentDownloads }).catch(() => {});
+  }, [settings.maxConcurrentDownloads]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    invokeCommand('set_close_to_tray', { enabled: settings.minimizeToTray }).catch(() => {});
+  }, [settings.minimizeToTray]);
+
+  // Clipboard monitor: offer to download links that were just copied
+  useEffect(() => {
+    addOpenRef.current = isAddModalOpen;
+  }, [isAddModalOpen]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment() || !settings.clipboardMonitor) return;
+    let stopped = false;
+    const tick = async () => {
+      const text = (await readClipboardText()).trim();
+      if (stopped) return;
+      if (lastClipRef.current === null) {
+        lastClipRef.current = text; // ignore whatever was copied before NOVA looked
+        return;
+      }
+      if (text === lastClipRef.current) return;
+      lastClipRef.current = text;
+      if (addOpenRef.current) return;
+      const kind = classifyLink(text);
+      if (!kind || dismissedClipsRef.current.has(text)) return;
+      setClipOffer({ url: text, kind });
+    };
+    const timer = setInterval(tick, 1500);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [settings.clipboardMonitor]);
+
+  useEffect(() => {
+    if (!clipOffer) return;
+    const t = setTimeout(() => setClipOffer(null), 15000);
+    return () => clearTimeout(t);
+  }, [clipOffer]);
+
+  // "When all downloads finish": exit / sleep / shut down after a 20 second warning
+  useEffect(() => {
+    const active = downloads.some((d) => d.status === 'downloading');
+    const pending = downloads.some((d) => d.status === 'queued');
+    if (active) armedRef.current = true;
+    if (armedRef.current && !active && !pending && settings.afterDownloads !== 'none' && !powerCountdown) {
+      armedRef.current = false;
+      setPowerCountdown({ action: settings.afterDownloads, left: 20 });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloads, settings.afterDownloads]);
+
+  useEffect(() => {
+    if (!powerCountdown) return;
+    if (powerCountdown.left <= 0) {
+      invokeCommand('power_action', { action: powerCountdown.action }).catch(() => {});
+      setSettings((prev) => ({ ...prev, afterDownloads: 'none' }));
+      setPowerCountdown(null);
+      return;
+    }
+    const t = setTimeout(() => setPowerCountdown((c) => (c ? { ...c, left: c.left - 1 } : c)), 1000);
+    return () => clearTimeout(t);
+  }, [powerCountdown]);
 
   // Start with Windows
   useEffect(() => {
@@ -565,7 +670,27 @@ export default function App() {
             quality: item.videoQuality || 'best',
           },
         })
+      : item.protocol === 'torrent'
+      ? invokeCommand('start_torrent', {
+          request: { id: item.id, url: item.url, directory: item.directory },
+        })
       : invokeCommand('start_download', { request: item });
+
+  // "Download later": stored as queued in the engine; it starts when a download slot is free
+  const queueNativeDownload = (item: DownloadItem) =>
+    invokeCommand('queue_download', {
+      request: {
+        id: item.id,
+        url: item.url,
+        filename: item.filename,
+        directory: item.directory,
+        category: item.category,
+        protocol: item.protocol,
+        total_bytes: item.totalBytes,
+        segments_count: item.segmentsCount,
+        quality: item.videoQuality,
+      },
+    });
 
   const handleRetry = async (id: string) => {
     activeTransfersRef.current.delete(id);
@@ -637,6 +762,9 @@ export default function App() {
         await startNativeDownload(item);
         showToast(`Started: ${item.filename}`);
       } else {
+        if (item.status === 'queued' && isTauriEnvironment()) {
+          await queueNativeDownload(item);
+        }
         showToast(`Queued: ${item.filename}`);
       }
       setDownloads(prev => [item, ...prev]);
@@ -728,6 +856,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenBrowserHub={() => setActiveView('browser_hub')}
         onOpenVideoSniffer={() => setActiveView('video_sniffer')}
+        onOpenBatch={() => setIsBatchOpen(true)}
         activeView={activeView}
         setActiveView={setActiveView}
         accentClasses={accentClasses}
@@ -815,6 +944,64 @@ export default function App() {
         onAddDownload={handleAddDownload}
         accentClasses={accentClasses}
       />
+
+      <BatchDownloadModal
+        isOpen={isBatchOpen}
+        onClose={() => setIsBatchOpen(false)}
+        settings={settings}
+        onAddDownload={handleAddDownload}
+        accentClasses={accentClasses}
+      />
+
+      {clipOffer && (
+        <div className="fixed bottom-4 right-4 z-[70] w-80 bg-[#141821] border border-white/[0.15] rounded-xl shadow-2xl p-3 text-xs">
+          <div className="font-semibold text-slate-100 mb-0.5">
+            {clipOffer.kind === 'magnet' ? 'Magnet link copied' : clipOffer.kind === 'video' ? 'Video link copied' : 'Download link copied'}
+          </div>
+          <div className="font-mono text-[11px] text-slate-400 truncate mb-2.5" title={clipOffer.url}>
+            {clipOffer.url}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => {
+                dismissedClipsRef.current.add(clipOffer.url);
+                setClipOffer(null);
+              }}
+              className="px-3 py-1 rounded-md border border-white/[0.12] text-slate-300 hover:bg-white/[0.06]"
+            >
+              Dismiss
+            </button>
+            <button
+              onClick={() => {
+                openAddWithLink(clipOffer.url);
+                setClipOffer(null);
+              }}
+              className={`px-3 py-1 rounded-md font-bold text-slate-950 ${accentClasses.bg}`}
+            >
+              Download
+            </button>
+          </div>
+        </div>
+      )}
+
+      {powerCountdown && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs z-[80] flex items-center justify-center p-4">
+          <div className="bg-[#141821] border border-white/[0.15] rounded-xl shadow-2xl p-6 text-center w-80 text-sm">
+            <div className="text-base font-semibold text-slate-100 mb-1">All downloads finished</div>
+            <div className="text-slate-300">
+              NOVA will{' '}
+              {powerCountdown.action === 'exit' ? 'exit' : powerCountdown.action === 'sleep' ? 'put the PC to sleep' : 'shut down the PC'} in{' '}
+              <span className="font-bold text-white">{powerCountdown.left}</span> seconds.
+            </div>
+            <button
+              onClick={() => setPowerCountdown(null)}
+              className={`mt-4 px-6 py-1.5 rounded-md font-bold text-slate-950 ${accentClasses.bg}`}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <ScheduleModal
         isOpen={isScheduleModalOpen}

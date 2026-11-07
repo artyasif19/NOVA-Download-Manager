@@ -1,7 +1,9 @@
 {
   "identifier": "default",
   "description": "Permissions for the NOVA main window (window controls, folder picker, paths)",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",
@@ -12,6 +14,7 @@
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "dialog:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "clipboard-manager:allow-read-text"
   ]
 }

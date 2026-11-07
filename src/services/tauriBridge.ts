@@ -388,3 +388,66 @@ export function resolutionName(height: number): string {
   if (height >= 720) return 'HD';
   return 'SD';
 }
+
+
+// ---------------------------------------------------------------------------
+// Clipboard, torrent files and link detection
+// ---------------------------------------------------------------------------
+
+/** Text currently on the clipboard (desktop app only; '' when unavailable) */
+export async function readClipboardText(): Promise<string> {
+  if (!isTauriEnvironment()) return '';
+  try {
+    const r: any = await invoke('plugin:clipboard-manager|read_text');
+    if (typeof r === 'string') return r;
+    return r?.plainText?.text ?? r?.text ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** Opens the Windows file picker for a .torrent file */
+export async function pickTorrentFile(): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const res = await invoke<string | string[] | null>('plugin:dialog|open', {
+      options: {
+        multiple: false,
+        directory: false,
+        title: 'Choose a .torrent file',
+        filters: [{ name: 'Torrent files', extensions: ['torrent'] }],
+      },
+    });
+    if (!res) return null;
+    return Array.isArray(res) ? res[0] ?? null : res;
+  } catch (err) {
+    console.error('Torrent file picker failed:', err);
+    return null;
+  }
+}
+
+export type LinkKind = 'magnet' | 'video' | 'file' | null;
+
+const VIDEO_SITES =
+  /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com|vimeo\.com|dailymotion\.com|twitch\.tv|tiktok\.com|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|soundcloud\.com|bilibili\.com)$/;
+const FILE_EXT =
+  /\.(zip|rar|7z|tar|gz|bz2|xz|iso|img|exe|msi|dmg|pkg|apk|deb|rpm|pdf|epub|mobi|docx?|xlsx?|pptx?|mp3|flac|wav|aac|m4a|ogg|mp4|mkv|avi|mov|wmv|flv|webm|m4v|torrent|bin|jar|psd)$/i;
+
+/** Decides whether copied text is a link NOVA should offer to download */
+export function classifyLink(text: string): LinkKind {
+  const t = (text || '').trim();
+  if (!t || t.length > 2000 || /\s/.test(t)) return null;
+  if (/^magnet:\?xt=/i.test(t)) return 'magnet';
+  try {
+    const u = new URL(t);
+    if (!/^(https?|ftp|ftps|sftp):$/.test(u.protocol)) return null;
+    if (VIDEO_SITES.test(u.hostname.toLowerCase())) {
+      // only real video pages, not the home page
+      return u.pathname.length > 1 || u.search.length > 1 ? 'video' : null;
+    }
+    if (FILE_EXT.test(u.pathname)) return 'file';
+  } catch {
+    return null;
+  }
+  return null;
+}

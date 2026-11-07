@@ -211,7 +211,7 @@ pub fn is_video_page_url(url: &str) -> bool {
     SITES.iter().any(|d| host == *d || host.ends_with(&format!(".{}", d)))
 }
 
-fn default_directory() -> String {
+pub fn default_directory() -> String {
     let base = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map(PathBuf::from)
@@ -317,6 +317,9 @@ async fn run_job(
         .arg("--progress-template")
         .arg("download:NOVA|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(info.title)s");
 
+    if let Some(proxy) = crate::net_config::current_proxy() {
+        cmd.arg("--proxy").arg(proxy);
+    }
     if let Some(ffmpeg) = find_tool(&app, "ffmpeg.exe") {
         if let Some(dir) = ffmpeg.parent() {
             cmd.arg("--ffmpeg-location").arg(dir);
@@ -595,6 +598,9 @@ pub async fn probe_video_inner(app: &AppHandle, url: String) -> Result<VideoInfo
         .ok_or_else(|| "Video downloader component (yt-dlp.exe) was not found. Please reinstall NOVA.".to_string())?;
 
     let mut cmd = tokio::process::Command::new(&ytdlp);
+    if let Some(proxy) = crate::net_config::current_proxy() {
+        cmd.arg("--proxy").arg(proxy);
+    }
     cmd.arg("--ignore-config")
         .arg("--no-playlist")
         .arg("--no-warnings")

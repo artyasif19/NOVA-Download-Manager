@@ -37,6 +37,7 @@ interface TopToolbarProps {
   onOpenSettings: () => void;
   onOpenBrowserHub: () => void;
   onOpenVideoSniffer: () => void;
+  onOpenBatch: () => void;
   activeView: 'downloads' | 'video_sniffer' | 'browser_hub' | 'speed_test';
   setActiveView: (view: 'downloads' | 'video_sniffer' | 'browser_hub' | 'speed_test') => void;
   accentClasses: {
@@ -58,6 +59,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   settings,
   onUpdateSettings,
   onOpenSettings,
+  onOpenBatch,
   activeView,
   setActiveView,
   accentClasses,
@@ -119,6 +121,27 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             <span className="hidden sm:inline">Schedule</span>
           </button>
         )}
+
+        <button
+          onClick={onOpenBatch}
+          title="Add many downloads at once (link pattern or list of links)"
+          className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:bg-white/[0.06] rounded-md transition-colors"
+        >
+          <Layers className="w-3.5 h-3.5 text-slate-400" />
+          <span className="hidden md:inline">Batch</span>
+        </button>
+
+        <select
+          value={settings.afterDownloads}
+          onChange={(e) => onUpdateSettings({ afterDownloads: e.target.value as AppSettings['afterDownloads'] })}
+          title="What NOVA does when every download has finished"
+          className="bg-transparent border border-white/[0.1] rounded-md px-1.5 py-1 text-[11px] text-slate-300 cursor-pointer"
+        >
+          <option value="none">When done: nothing</option>
+          <option value="exit">When done: exit NOVA</option>
+          <option value="sleep">When done: sleep PC</option>
+          <option value="shutdown">When done: shut down PC</option>
+        </select>
 
         <button
           onClick={onClearCompleted}

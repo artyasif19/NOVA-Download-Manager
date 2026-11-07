@@ -23,6 +23,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   speedLimitKBps: 5120, // 5 MB/s
   soundNotification: true,
   startWithWindows: true,
+  clipboardMonitor: true,
+  afterDownloads: 'none',
+  proxyMode: 'none',
+  proxyHost: '',
+  proxyPort: 8080,
+  proxyUser: '',
+  proxyPass: '',
   minimizeToTray: true,
   autoCategorize: true,
   accentColor: 'cyan',

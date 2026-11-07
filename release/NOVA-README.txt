@@ -65,6 +65,21 @@ Project page:   https://github.com/artyasif19/NOVA-Download-Manager
  * In NOVA:  Add URL > "Video Sites" tab  or  the "Media Grabber"
    tab to paste a video link, preview it and pick a resolution.
  * Speed Test tab: check your internet speed.
+ * Torrents: Add URL > "Torrent / Magnet" tab. Paste a magnet link,
+   a .torrent link, or choose a .torrent file. Clicking a magnet
+   link in your browser can open NOVA too (Windows may ask you to
+   choose NOVA once under "Open with").
+ * Batch: the "Batch" button adds many files at once, from a link
+   pattern like  https://site.com/img[001-050].jpg  or a pasted
+   list of links. Batches use the queue and obey "Max concurrent
+   downloads" in Settings.
+ * Clipboard: copy a download, video or magnet link and NOVA offers
+   to download it (turn off in Settings > General).
+ * When done: the toolbar menu can exit NOVA, put the PC to sleep or
+   shut it down after the last download (20 second warning).
+ * Tray: closing the window keeps NOVA running in the system tray
+   (right-click the tray icon > Exit NOVA to quit).
+ * Proxy: Settings > Connections (HTTP or SOCKS5, with login).
  * Settings > Appearance: Dark, Light and Liquid Glass themes,
    gradient styles, custom colors and your own background picture.
 
@@ -90,8 +105,8 @@ Project page:   https://github.com/artyasif19/NOVA-Download-Manager
  LEGAL
 --------------------------------------------------------------
  Only download content you own or have permission to save.
- NOVA bundles yt-dlp (Unlicense) and FFmpeg (LGPL). Thank you to
- those projects.
+ NOVA bundles yt-dlp (Unlicense), FFmpeg (LGPL) and aria2 (GPL v2).
+ Thank you to those projects.
 
  Questions, bugs or ideas?  https://github.com/artyasif19
 ==============================================================

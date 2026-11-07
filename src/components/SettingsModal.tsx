@@ -206,6 +206,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
                     <div>
+                      <div className="font-medium text-slate-200">Watch the clipboard for links</div>
+                      <div className="text-[11px] text-slate-400">
+                        When you copy a download, video or magnet link, NOVA offers to download it. Only links are
+                        looked at; nothing is saved or sent anywhere.
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.clipboardMonitor}
+                      onChange={(e) => onUpdateSettings({ clipboardMonitor: e.target.checked })}
+                      className="rounded border-white/20 bg-slate-800 text-cyan-500 cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="pb-3 border-b border-white/[0.06]">
+                    <div className="font-medium text-slate-200">When all downloads finish</div>
+                    <div className="text-[11px] text-slate-400 mb-1.5">NOVA waits 20 seconds first, so you can cancel.</div>
+                    <select
+                      value={settings.afterDownloads}
+                      onChange={(e) => onUpdateSettings({ afterDownloads: e.target.value as AppSettings['afterDownloads'] })}
+                      className="bg-[#0c0f15] border border-white/[0.1] rounded px-2.5 py-1.5 text-slate-200"
+                    >
+                      <option value="none">Do nothing</option>
+                      <option value="exit">Exit NOVA</option>
+                      <option value="sleep">Put the PC to sleep</option>
+                      <option value="shutdown">Shut down the PC</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
+                    <div>
                       <div className="font-medium text-slate-200">Sound Notifications</div>
                       <div className="text-[11px] text-slate-400">Play subtle sound chime when download completes or errors</div>
                     </div>
@@ -325,6 +356,65 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <p className="text-[11px] text-slate-400 mt-1">
                     Matches standard Windows 11 Chrome/Edge browser signature to ensure seamless server compatibility.
                   </p>
+                </div>
+
+                <div className="pt-3 border-t border-white/[0.06] space-y-2">
+                  <div className="font-medium text-slate-200">Proxy</div>
+                  <div className="text-[11px] text-slate-400">
+                    Used for web, video and torrent downloads. FTP and SFTP connect directly. Torrent proxy changes apply
+                    after restarting NOVA.
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {([
+                      ['none', 'No proxy'],
+                      ['http', 'HTTP / HTTPS'],
+                      ['socks5', 'SOCKS5'],
+                    ] as const).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => onUpdateSettings({ proxyMode: id })}
+                        className={`py-1.5 rounded border text-[11px] transition-colors ${
+                          settings.proxyMode === id
+                            ? `${accentClasses.bg} text-slate-950 font-bold border-transparent`
+                            : 'bg-white/[0.04] text-slate-300 border-white/[0.08] hover:bg-white/[0.08]'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {settings.proxyMode !== 'none' && (
+                    <div className="grid grid-cols-[1fr_90px] gap-2">
+                      <input
+                        value={settings.proxyHost}
+                        onChange={(e) => onUpdateSettings({ proxyHost: e.target.value })}
+                        placeholder="Proxy address (e.g. 127.0.0.1)"
+                        className="bg-[#0c0f15] border border-white/[0.1] rounded px-2.5 py-1.5 font-mono text-[11px] text-slate-200"
+                      />
+                      <input
+                        type="number"
+                        value={settings.proxyPort}
+                        onChange={(e) => onUpdateSettings({ proxyPort: Number(e.target.value) })}
+                        placeholder="Port"
+                        className="bg-[#0c0f15] border border-white/[0.1] rounded px-2.5 py-1.5 font-mono text-[11px] text-slate-200"
+                      />
+                      <input
+                        value={settings.proxyUser}
+                        onChange={(e) => onUpdateSettings({ proxyUser: e.target.value })}
+                        placeholder="Username (optional)"
+                        className="bg-[#0c0f15] border border-white/[0.1] rounded px-2.5 py-1.5 text-[11px] text-slate-200"
+                      />
+                      <div />
+                      <input
+                        type="password"
+                        value={settings.proxyPass}
+                        onChange={(e) => onUpdateSettings({ proxyPass: e.target.value })}
+                        placeholder="Password (optional)"
+                        className="bg-[#0c0f15] border border-white/[0.1] rounded px-2.5 py-1.5 text-[11px] text-slate-200"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}

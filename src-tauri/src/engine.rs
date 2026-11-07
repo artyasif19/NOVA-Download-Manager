@@ -108,6 +108,10 @@ impl DownloadEngine {
             .pool_max_idle_per_host(32)
             .tcp_keepalive(std::time::Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::limited(10))
+            // Proxy chosen in NOVA's settings (checked on every request); otherwise the system proxy is used
+            .proxy(reqwest::Proxy::custom(|_url| {
+                crate::net_config::current_proxy().and_then(|p| reqwest::Url::parse(&p).ok())
+            }))
             .build()
             .expect("Failed to initialize reqwest client");
 

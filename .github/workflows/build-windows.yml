@@ -83,6 +83,13 @@ jobs:
           Copy-Item $ffmpeg.FullName "src-tauri/binaries/ffmpeg.exe"
           Copy-Item $ffprobe.FullName "src-tauri/binaries/ffprobe.exe"
           if (-not (Test-Path "src-tauri/binaries/yt-dlp.exe")) { throw "yt-dlp.exe download failed" }
+
+          # aria2 (torrent / magnet engine)
+          Invoke-WebRequest -Uri "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -OutFile "aria2.zip"
+          Expand-Archive -Path "aria2.zip" -DestinationPath "aria2-temp" -Force
+          $aria = Get-ChildItem -Path "aria2-temp" -Recurse -Filter "aria2c.exe" | Select-Object -First 1
+          if (-not $aria) { throw "aria2c.exe not found in download" }
+          Copy-Item $aria.FullName "src-tauri/binaries/aria2c.exe"
           Get-ChildItem src-tauri/binaries | Format-Table Name, Length
 
       - name: Build browser helper (nova_host) and stage extensions

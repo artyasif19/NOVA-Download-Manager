@@ -34,7 +34,7 @@ export interface DownloadSegment {
   isActive: boolean;
 }
 
-export type DownloadProtocol = 'http' | 'https' | 'ftp' | 'ftps' | 'sftp' | 'hls' | 'dash' | 'video';
+export type DownloadProtocol = 'http' | 'https' | 'ftp' | 'ftps' | 'sftp' | 'hls' | 'dash' | 'video' | 'torrent';
 
 export interface ProtocolCredentials {
   username?: string;
@@ -106,6 +106,13 @@ export interface AppSettings {
   speedLimitKBps: number;
   soundNotification: boolean;
   startWithWindows: boolean;
+  clipboardMonitor: boolean; // offer to download links copied to the clipboard
+  afterDownloads: 'none' | 'exit' | 'sleep' | 'shutdown'; // action when every download has finished
+  proxyMode: 'none' | 'http' | 'socks5';
+  proxyHost: string;
+  proxyPort: number;
+  proxyUser: string;
+  proxyPass: string;
   minimizeToTray: boolean;
   autoCategorize: boolean;
   accentColor: 'cyan' | 'emerald' | 'violet' | 'amber' | 'crimson' | 'slate';

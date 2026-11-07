@@ -5,6 +5,8 @@ mod engine;
 mod db;
 mod video;
 mod host_setup;
+mod net_config;
+mod torrent;
 
 use std::sync::Arc;
 use std::path::PathBuf;
@@ -12,13 +14,21 @@ use tauri::{State, Manager};
 use engine::{DownloadEngine, DownloadRequest, ProbeInfo};
 use db::{Database, DownloadRecord};
 use tauri::Emitter;
+use torrent::{TorrentManager, TorrentRequest};
 use video::{VideoManager, VideoRequest};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct AppState {
     pub engine: Arc<DownloadEngine>,
     pub db: Arc<Database>,
     pub video: Arc<VideoManager>,
+    pub torrent: TorrentManager,
 }
+
+/// Close button hides NOVA to the tray (downloads keep running) instead of quitting
+static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(true);
+/// Magnet link / .torrent file NOVA was started with (read once by the UI)
+static INITIAL_LINK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 #[tauri::command]
 async fn probe_target_url(
@@ -48,12 +58,116 @@ async fn start_video_download(
 }
 
 #[tauri::command]
+async fn start_torrent(
+    request: TorrentRequest,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>
+) -> Result<String, String> {
+    state.torrent.start(app, request)
+}
+
+#[derive(serde::Deserialize)]
+struct QueueRequest {
+    id: String,
+    url: String,
+    filename: String,
+    directory: String,
+    category: String,
+    protocol: String,
+    #[serde(default)]
+    total_bytes: u64,
+    #[serde(default)]
+    segments_count: Option<usize>,
+    #[serde(default)]
+    quality: Option<String>,
+}
+
+/// "Download later": stores the download as queued; the queue worker starts it when a slot is free
+#[tauri::command]
+async fn queue_download(
+    request: QueueRequest,
+    state: State<'_, AppState>
+) -> Result<String, String> {
+    let rec = DownloadRecord {
+        id: request.id.clone(),
+        url: request.url,
+        filename: request.filename,
+        directory: request.directory,
+        total_bytes: request.total_bytes,
+        downloaded_bytes: 0,
+        status: "queued".to_string(),
+        category: request.category,
+        protocol: request.protocol,
+        supports_range: true,
+        etag: None,
+        mime_type: request.quality,
+        date_added: chrono::Utc::now().timestamp_millis(),
+        date_finished: None,
+        sha256_expected: None,
+        sha256_calculated: None,
+        segments_count: request.segments_count.unwrap_or(8).max(1),
+        priority: "normal".to_string(),
+        error_message: None,
+    };
+    state.db.insert_download(&rec).map_err(|e| e.to_string())?;
+    Ok(request.id)
+}
+
+#[tauri::command]
+fn set_close_to_tray(enabled: bool) {
+    CLOSE_TO_TRAY.store(enabled, Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn take_initial_link() -> Option<String> {
+    INITIAL_LINK.lock().ok().and_then(|mut g| g.take())
+}
+
+/// What to do when every download has finished: exit | sleep | shutdown
+#[tauri::command]
+fn power_action(action: String, app: tauri::AppHandle) -> Result<(), String> {
+    use std::process::Command;
+    match action.as_str() {
+        "exit" => {
+            app.exit(0);
+            Ok(())
+        }
+        "sleep" => {
+            let mut cmd = Command::new("rundll32.exe");
+            cmd.args(["powrprof.dll,SetSuspendState", "0,1,0"]);
+            host_setup::hide_window(&mut cmd);
+            cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+        }
+        "shutdown" => {
+            let mut cmd = Command::new("shutdown");
+            cmd.args(["/s", "/t", "20", "/c", "NOVA Download Manager: all downloads finished"]);
+            host_setup::hide_window(&mut cmd);
+            cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+        }
+        _ => Err("Unknown action".to_string()),
+    }
+}
+
+/// Cancels a pending Windows shutdown started by power_action
+#[tauri::command]
+fn cancel_shutdown() {
+    let mut cmd = std::process::Command::new("shutdown");
+    cmd.arg("/a");
+    host_setup::hide_window(&mut cmd);
+    let _ = cmd.output();
+}
+
+#[tauri::command]
 async fn pause_download(
     id: String,
     state: State<'_, AppState>
 ) -> Result<(), String> {
     if state.video.is_video(&id) {
         state.video.pause(&id);
+        return Ok(());
+    }
+    if state.torrent.is_torrent(&id) {
+        state.torrent.pause(&id);
         return Ok(());
     }
     state.engine.pause_download(&id).await.map_err(|e| e.to_string())
@@ -68,6 +182,9 @@ async fn resume_download(
     if state.video.is_video(&id) {
         return state.video.resume(app, &id);
     }
+    if state.torrent.is_torrent(&id) {
+        return state.torrent.resume(app, &id);
+    }
     state.engine.resume_download(&id).await.map_err(|e| e.to_string())
 }
 
@@ -78,6 +195,10 @@ async fn cancel_download(
 ) -> Result<(), String> {
     if state.video.is_video(&id) {
         state.video.cancel(&id);
+        return Ok(());
+    }
+    if state.torrent.is_torrent(&id) {
+        state.torrent.cancel(&id);
         return Ok(());
     }
     state.engine.cancel_download(&id).await.map_err(|e| e.to_string())
@@ -105,6 +226,9 @@ async fn delete_download_item(
 ) -> Result<(), String> {
     if state.video.is_video(&id) {
         state.video.cancel(&id);
+    }
+    if state.torrent.is_torrent(&id) {
+        state.torrent.cancel(&id);
     }
     state.db.delete_download(&id).map_err(|e| e.to_string())
 }
@@ -469,6 +593,31 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
                         status_line, resp_body.len(), resp_body
                     );
                     let _ = socket.write_all(resp.as_bytes()).await;
+                } else if method_line.starts_with("POST /api/open_link") {
+                    // A second NOVA launch (or the magnet: handler) passes its link to this instance
+                    let link = serde_json::from_slice::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(|s| s.to_string()));
+                    let ok = match (link, video_mgr.app_handle()) {
+                        (Some(l), Some(app)) => {
+                            host_setup::bring_to_front(&app);
+                            if l != "nova://show" {
+                                let _ = app.emit("open-link", serde_json::json!({ "url": l }));
+                            }
+                            true
+                        }
+                        _ => false,
+                    };
+                    let (code, payload) = if ok {
+                        ("200 OK", "{\"ok\":true}")
+                    } else {
+                        ("400 Bad Request", "{\"ok\":false}")
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        code, payload.len(), payload
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
                 } else if method_line.starts_with("POST /api/video_info") {
                     let link = serde_json::from_slice::<serde_json::Value>(&body)
                         .ok()
@@ -572,16 +721,34 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
 }
 
 /// Persistent Queue Worker: monitors SQLite for queued downloads and resumes them
-fn start_persistent_queue_worker(engine: Arc<DownloadEngine>, db: Arc<Database>) {
+fn start_persistent_queue_worker(
+    engine: Arc<DownloadEngine>,
+    db: Arc<Database>,
+    video: Arc<VideoManager>,
+    torrent: TorrentManager,
+) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             if let Ok(active) = db.get_active_downloads_count() {
-                const MAX_CONCURRENT: usize = 3;
-                if active < MAX_CONCURRENT {
-                    let needed = MAX_CONCURRENT - active;
+                let max_concurrent = net_config::max_concurrent();
+                if active < max_concurrent {
+                    let needed = max_concurrent - active;
                     if let Ok(queued) = db.claim_next_queued_downloads(needed) {
                         for q in queued {
+                            // Video-site and torrent downloads have their own engines
+                            if q.protocol == "video" {
+                                if let Some(app) = video.app_handle() {
+                                    let _ = video.resume(app, &q.id);
+                                }
+                                continue;
+                            }
+                            if q.protocol == "torrent" {
+                                if let Some(app) = video.app_handle() {
+                                    let _ = torrent.resume(app, &q.id);
+                                }
+                                continue;
+                            }
                             let dest_path = PathBuf::from(&q.directory).join(&q.filename);
                             let req = engine::DownloadRequest {
                                 id: q.id.clone(),
@@ -615,22 +782,47 @@ fn main() {
         let _ = std::fs::write(dir.join("crash.log"), format!("{}\n", info));
     }));
 
+    // Magnet link / .torrent given on the command line (or a second launch of NOVA):
+    // hand it to the running NOVA and stop, otherwise keep it for this instance.
+    let link_arg = std::env::args()
+        .skip(1)
+        .find(|a| a.starts_with("magnet:") || a.to_lowercase().ends_with(".torrent"));
+    let forward = link_arg.clone().unwrap_or_else(|| "nova://show".to_string());
+    if host_setup::forward_link_to_running_instance(&forward) {
+        return;
+    }
+    if let Some(link) = link_arg {
+        if let Ok(mut g) = INITIAL_LINK.lock() {
+            *g = Some(link);
+        }
+    }
+
     let db = Arc::new(Database::init().expect("Failed to initialize SQLite database"));
     let engine = Arc::new(DownloadEngine::new(Arc::clone(&db)));
 
     let video = Arc::new(VideoManager::new(Arc::clone(&db)));
+    let torrent = TorrentManager::new(Arc::clone(&db));
 
     // Launch secure local IPC bridge for native messaging host
     start_local_ipc_service(Arc::clone(&engine), Arc::clone(&db), Arc::clone(&video));
 
     // Launch background persistent queue worker
-    start_persistent_queue_worker(Arc::clone(&engine), Arc::clone(&db));
+    start_persistent_queue_worker(Arc::clone(&engine), Arc::clone(&db), Arc::clone(&video), torrent.clone());
 
     let video_setup = Arc::clone(&video);
     let engine_setup = Arc::clone(&engine);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(move |app| {
             engine_setup.set_app_handle(app.handle().clone());
             video_setup.set_app_handle(app.handle().clone());
@@ -643,6 +835,38 @@ fn main() {
                 }
             });
 
+            // System tray icon: left click opens NOVA, menu has Open / Exit
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+                let show_item = MenuItem::with_id(app, "show", "Open NOVA", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "Exit NOVA", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+                let mut tray = TrayIconBuilder::new()
+                    .tooltip("NOVA Download Manager")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "show" => host_setup::bring_to_front(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            host_setup::bring_to_front(tray.app_handle());
+                        }
+                    });
+                if let Some(icon) = app.default_window_icon() {
+                    tray = tray.icon(icon.clone());
+                }
+                let _ = tray.build(app)?;
+            }
+
             // Started by Windows at login: stay out of the way
             if std::env::args().any(|a| a == "--minimized") {
                 if let Some(w) = tauri::Manager::get_webview_window(app, "main") {
@@ -651,11 +875,20 @@ fn main() {
             }
             Ok(())
         })
-        .manage(AppState { engine, db, video })
+        .manage(AppState { engine, db, video, torrent })
         .invoke_handler(tauri::generate_handler![
             probe_target_url,
             start_download,
             start_video_download,
+            start_torrent,
+            queue_download,
+            set_close_to_tray,
+            take_initial_link,
+            power_action,
+            cancel_shutdown,
+            torrent::check_torrent_file,
+            net_config::set_network_config,
+            net_config::set_max_concurrent,
             video::probe_video,
             host_setup::get_extension_info,
             host_setup::open_folder,

@@ -4,7 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { invokeCommand, isTauriEnvironment, pickFolder, probeVideo, resolutionName, VideoInfo } from '../services/tauriBridge';
+import { classifyLink, invokeCommand, isTauriEnvironment, pickFolder, pickTorrentFile, probeVideo, resolutionName, VideoInfo } from '../services/tauriBridge';
+import { detectProtocol } from '../services/protocolParser';
 import { 
   X, 
   Download, 
@@ -97,6 +98,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   }, [isOpen, settings.defaultFolder]);
 
   const [videoQuality, setVideoQuality] = useState<string>('best');
+  const isSpecial = protocol === 'video' || protocol === 'torrent';
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [videoProbing, setVideoProbing] = useState(false);
   const [videoError, setVideoError] = useState('');
@@ -105,8 +107,15 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   useEffect(() => {
     if (isOpen && prefill && prefill.url) {
       setUrl(prefill.url);
-      setProtocol('video');
-      setVideoQuality(prefill.quality && prefill.quality !== 'best' ? prefill.quality : 'best');
+      const kind = classifyLink(prefill.url);
+      if (kind === 'magnet' || /\.torrent(\?|$)/i.test(prefill.url)) {
+        setProtocol('torrent');
+      } else if (kind === 'video' || prefill.quality) {
+        setProtocol('video');
+        setVideoQuality(prefill.quality && prefill.quality !== 'best' ? prefill.quality : 'best');
+      } else {
+        setProtocol(detectProtocol(prefill.url));
+      }
       setVideoInfo(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -243,6 +252,29 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     e.preventDefault();
     if (!url.trim()) return;
 
+    if (protocol === 'torrent') {
+      const torrentItem: DownloadItem = {
+        id: `dl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        url: url.trim(),
+        filename: 'Fetching torrent info...',
+        directory,
+        totalBytes: 0,
+        downloadedBytes: 0,
+        speed: 0,
+        status: 'downloading',
+        category: 'custom',
+        protocol: 'torrent',
+        segmentsCount: 1,
+        segments: [],
+        supportsRange: true,
+        dateAdded: Date.now(),
+        priority: 'normal',
+      };
+      onAddDownload(torrentItem, true);
+      onClose();
+      return;
+    }
+
     if (protocol === 'video') {
       const videoItem: DownloadItem = {
         id: `dl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
@@ -347,6 +379,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             {[
               { id: 'https', label: 'HTTP / HTTPS' },
               { id: 'video', label: 'Video Sites' },
+              { id: 'torrent', label: 'Torrent / Magnet' },
               { id: 'ftp', label: 'FTP / FTPS' },
               { id: 'sftp', label: 'SFTP (SSH)' },
               { id: 'hls', label: 'HLS / DASH Stream' },
@@ -377,6 +410,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 ? 'FTP Server URL (e.g. ftp://host/path/file.iso)'
                 : protocol === 'sftp'
                 ? 'SFTP Path (e.g. sftp://user@host:22/remote/path.zip)'
+                : protocol === 'torrent'
+                ? 'Magnet link, .torrent link, or .torrent file'
                 : protocol === 'video'
                 ? 'Video page link (YouTube, Vimeo, X, TikTok, Instagram, Facebook...)'
                 : 'Download or Stream URL'}
@@ -387,17 +422,30 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder={protocol === 'ftp' ? 'ftp://ftp.example.com/pub/file.tar.gz' : protocol === 'video' ? 'https://www.youtube.com/watch?v=...' : 'https://example.com/files/archive.zip'}
+                  placeholder={protocol === 'ftp' ? 'ftp://ftp.example.com/pub/file.tar.gz' : protocol === 'torrent' ? 'magnet:?xt=urn:btih:...' : protocol === 'video' ? 'https://www.youtube.com/watch?v=...' : 'https://example.com/files/archive.zip'}
                   value={url}
                   onChange={(e) => {
                     setUrl(e.target.value);
                     setProbeResult(null);
-                    if (isVideoSiteUrl(e.target.value)) setProtocol('video');
+                    if (/^magnet:/i.test(e.target.value.trim())) setProtocol('torrent');
+                    else if (isVideoSiteUrl(e.target.value)) setProtocol('video');
                   }}
                   className="w-full bg-[#0d1016] border border-white/[0.1] rounded pl-8 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-white/30 font-mono"
                 />
               </div>
-              {protocol !== 'video' && (<button
+              {protocol === 'torrent' && isTauriEnvironment() && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const f = await pickTorrentFile();
+                    if (f) setUrl(f);
+                  }}
+                  className="px-3.5 py-2 bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.1] rounded text-slate-200 font-medium shrink-0 transition-colors"
+                >
+                  Choose .torrent file
+                </button>
+              )}
+              {!isSpecial && (<button
                 type="button"
                 onClick={() => handleProbe()}
                 disabled={!url || isProbing}
@@ -499,7 +547,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           )}
 
           {/* File Name & Estimated Size */}
-          {protocol !== 'video' && (<>
+          {!isSpecial && (<>
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
               <label className="text-[11px] font-medium text-slate-300 block mb-1">
@@ -573,6 +621,17 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
               </select>
             </div>
           </div>
+
+          {protocol === 'torrent' && (
+            <div className="bg-[#0d1016] border border-white/[0.08] rounded-lg p-3 space-y-1.5 text-slate-300">
+              <div className="font-semibold text-slate-200 text-xs">Torrent / magnet download</div>
+              <p className="text-[11px] text-slate-400">
+                Paste a magnet link, a link to a .torrent file, or choose a .torrent file from your PC. NOVA finds the
+                files, downloads them, and shows speed and time left. Seeding after the download is off by default.
+              </p>
+              <p className="text-[11px] text-slate-400">Only download content you have the right to share and save.</p>
+            </div>
+          )}
 
           {protocol === 'video' && (
             <div className="bg-[#0d1016] border border-white/[0.08] rounded-lg p-3 space-y-2.5">
@@ -668,7 +727,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             </div>
           )}
 
-          {protocol !== 'video' && (<>
+          {!isSpecial && (<>
           {/* Connection Segmentation & Thread Allocation */}
           <div className="bg-[#0d1016] border border-white/[0.08] rounded-lg p-3 space-y-2">
             <div className="flex items-center justify-between">
