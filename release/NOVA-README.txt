@@ -56,9 +56,11 @@ Project page:   https://github.com/artyasif19/NOVA-Download-Manager
 --------------------------------------------------------------
  3. HOW TO USE
 --------------------------------------------------------------
- * Click any download link in your browser: NOVA shows a
-   "Download File Info" window (like IDM). Choose Start Download,
-   Download Later or Cancel.
+ * Click any download link in your browser: a small "Download File
+   Info" window pops up (like IDM) without opening the main app.
+   Choose Start Download, Download Later or Cancel. After Start, a
+   small progress window shows speed, time left and connections;
+   you can pause, cancel or choose what happens when it finishes.
  * On YouTube and other video sites a "Download" button appears on
    the video. Click the small arrow to pick any resolution
    (4K, 2K, Full HD, HD, SD) with codec and file size.
@@ -88,6 +90,9 @@ Project page:   https://github.com/artyasif19/NOVA-Download-Manager
 --------------------------------------------------------------
  * "NOVA is not running" in the browser: open NOVA from the Start
    menu, then try again.
+ * "NOVA is not running" even though NOVA is open: look at the file
+   %LOCALAPPDATA%\\NOVA\\ipc.log (it appears only when NOVA could not
+   open a local port) and tell us what it says.
  * Button does not appear on a video: reload the page; make sure
    the extension is enabled and "Floating Video Sniffer" is on in
    the extension popup.

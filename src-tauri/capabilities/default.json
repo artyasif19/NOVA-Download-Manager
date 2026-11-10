@@ -2,7 +2,9 @@
   "identifier": "default",
   "description": "Permissions for the NOVA main window (window controls, folder picker, paths)",
   "windows": [
-    "main"
+    "main",
+    "confirm-*",
+    "progress-*"
   ],
   "permissions": [
     "core:default",
@@ -15,6 +17,11 @@
     "core:window:allow-start-dragging",
     "dialog:default",
     "dialog:allow-open",
-    "clipboard-manager:allow-read-text"
+    "clipboard-manager:allow-read-text",
+    "core:window:allow-set-title",
+    "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:event:default"
   ]
 }

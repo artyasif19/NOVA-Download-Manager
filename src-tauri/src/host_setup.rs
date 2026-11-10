@@ -315,3 +315,36 @@ pub fn forward_link_to_running_instance(link: &str) -> bool {
     };
     try_forward().unwrap_or(false)
 }
+
+/// Opens a finished file with its default program.
+#[tauri::command]
+pub fn open_file(path: String) -> Result<(), String> {
+    if !PathBuf::from(&path).exists() {
+        return Err("The file does not exist".to_string());
+    }
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/C", "start", "", path.as_str()]);
+    hide_window(&mut cmd);
+    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Shows a file selected inside its folder in Windows Explorer.
+#[tauri::command]
+pub fn reveal_file(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if p.is_dir() {
+        return Command::new("explorer").arg(&p).spawn().map(|_| ()).map_err(|e| e.to_string());
+    }
+    if !p.exists() {
+        // fall back to the folder
+        if let Some(parent) = p.parent() {
+            return Command::new("explorer").arg(parent).spawn().map(|_| ()).map_err(|e| e.to_string());
+        }
+        return Err("The file does not exist".to_string());
+    }
+    Command::new("explorer")
+        .args(["/select,", path.as_str()])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}

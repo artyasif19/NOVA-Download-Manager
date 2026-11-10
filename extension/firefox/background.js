@@ -7,9 +7,12 @@
  */
 
 const NATIVE_HOST_NAME = "com.nova.downloadmanager";
-const NOVA_PORT = 9654;
 const DUP_TIMEOUT_MS = 4000;
 const RECENT_DOWNLOADS_CACHE = new Map();
+
+const NOVA_PORT_FIRST = 9654;
+const NOVA_PORT_LAST = 9674;
+let novaPortCache = null;
 
 const ENDPOINTS = {
   ping: "ping",
@@ -18,12 +21,46 @@ const ENDPOINTS = {
   add_download: "downloads"
 };
 
+async function pingPort(port, timeoutMs) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch("http://127.0.0.1:" + port + "/api/ping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "ping" }),
+      signal: ctl.signal
+    });
+    return res.ok ? port : null;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** NOVA uses the first free port from 9654 upwards; find the one it is listening on. */
+async function findNovaPort() {
+  if (novaPortCache) {
+    const ok = await pingPort(novaPortCache, 1000);
+    if (ok) return ok;
+    novaPortCache = null;
+  }
+  const ports = [];
+  for (let p = NOVA_PORT_FIRST; p <= NOVA_PORT_LAST; p++) ports.push(p);
+  const found = (await Promise.all(ports.map((p) => pingPort(p, 1200)))).find((p) => p);
+  novaPortCache = found || null;
+  return novaPortCache;
+}
+
 async function novaHttp(message, timeoutMs) {
+  const port = await findNovaPort();
+  if (!port) return { reachable: false, error: "NOVA is not listening on any local port" };
   const ep = ENDPOINTS[message.action] || message.action;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetch("http://127.0.0.1:" + NOVA_PORT + "/api/" + ep, {
+    const res = await fetch("http://127.0.0.1:" + port + "/api/" + ep, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(message),
@@ -33,6 +70,7 @@ async function novaHttp(message, timeoutMs) {
     try { data = await res.json(); } catch (e) { /* empty body */ }
     return { reachable: true, httpOk: res.ok, data };
   } catch (e) {
+    novaPortCache = null;
     return { reachable: false, error: String(e) };
   } finally {
     clearTimeout(timer);
@@ -42,28 +80,23 @@ async function novaHttp(message, timeoutMs) {
 /** Sends a message to NOVA and always resolves with a host-style response object. */
 async function novaSend(message, timeoutMs = 6000) {
   const r = await novaHttp(message, timeoutMs);
-  if (r.reachable) {
-    const d = r.data || {};
-    if (message.action === "ping") {
-      return { status: "online", accepted: true, data: d, error: null };
-    }
-    if (message.action === "video_info") {
-      return { status: r.httpOk ? "success" : "error", accepted: r.httpOk, data: d, error: d.error || null };
-    }
-    const accepted = d.accepted === true;
-    return {
-      status: accepted ? "accepted" : "rejected",
-      accepted,
-      data: d,
-      error: accepted ? null : (d.reason || d.error || "NOVA declined this download")
-    };
+  if (!r.reachable) {
+    return { status: "offline", accepted: false, error: "NOVA_ENGINE_NOT_RUNNING", detail: r.error };
   }
-  // NOVA not reachable over HTTP: try the native messaging helper as a fallback
-  try {
-    const response = await browser.runtime.sendNativeMessage(NATIVE_HOST_NAME, message);
-    if (response) return response;
-  } catch (e) { /* ignore */ }
-  return { status: "offline", accepted: false, error: "NOVA_ENGINE_NOT_RUNNING", detail: r.error };
+  const d = r.data || {};
+  if (message.action === "ping") {
+    return { status: "online", accepted: true, data: d, error: null };
+  }
+  if (message.action === "video_info") {
+    return { status: r.httpOk ? "success" : "error", accepted: r.httpOk, data: d, error: d.error || null };
+  }
+  const accepted = d.accepted === true;
+  return {
+    status: accepted ? "accepted" : "rejected",
+    accepted,
+    data: d,
+    error: accepted ? null : (d.reason || d.error || "NOVA declined this download")
+  };
 }
 
 // Context Menu Setup

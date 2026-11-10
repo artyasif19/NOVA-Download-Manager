@@ -99,12 +99,18 @@ export default function App() {
           setIsAddModalOpen(true);
         });
         const c = await listen<{ url: string }>('open-link', (e) => openAddWithLink(e.payload.url));
+        // downloads started from the small pop-up windows appear in the main list too
+        const d = await listen<DownloadItem>('dialog-download-started', (e) => {
+          const it = e.payload;
+          setDownloads((prev) => (prev.some((x) => x.id === it.id) ? prev : [it, ...prev]));
+        });
         if (disposed) {
           a();
           b();
           c();
+          d();
         } else {
-          unlisteners.push(a, b, c);
+          unlisteners.push(a, b, c, d);
         }
         // magnet link or .torrent file NOVA was started with
         invokeCommand<string | null>('take_initial_link')

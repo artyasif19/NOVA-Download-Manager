@@ -5,6 +5,7 @@ mod engine;
 mod db;
 mod video;
 mod host_setup;
+mod dialogs;
 mod net_config;
 mod torrent;
 
@@ -360,14 +361,44 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
     }
 
     let token_clone = auth_token.clone();
+    let session_file_clone = session_file.clone();
+    let session_dir_clone = session_dir.clone();
     tauri::async_runtime::spawn(async move {
         use tokio::net::TcpListener;
         use tokio::io::AsyncWriteExt;
 
-        let listener = match TcpListener::bind(format!("127.0.0.1:{}", port)).await {
-            Ok(l) => l,
-            Err(_) => return,
+        // Try 9654 first, then the next ports (Windows can reserve ports, or another program may use one)
+        let mut bound: Option<(TcpListener, u16)> = None;
+        let mut last_err = String::new();
+        for candidate in 9654u16..=9674u16 {
+            match TcpListener::bind(("127.0.0.1", candidate)).await {
+                Ok(l) => {
+                    bound = Some((l, candidate));
+                    break;
+                }
+                Err(e) => last_err = format!("port {}: {}", candidate, e),
+            }
+        }
+        let (listener, port) = match bound {
+            Some(v) => v,
+            None => {
+                let _ = std::fs::write(
+                    session_dir_clone.join("ipc.log"),
+                    format!("NOVA could not open a local port for the browser extension. Last error: {}\n", last_err),
+                );
+                return;
+            }
         };
+
+        // Publish the port that is really in use
+        let session_data = serde_json::json!({
+            "port": port,
+            "token": token_clone,
+            "pid": std::process::id()
+        });
+        if let Ok(content) = serde_json::to_string_pretty(&session_data) {
+            let _ = std::fs::write(&session_file_clone, content);
+        }
 
         while let Ok((mut socket, _)) = listener.accept().await {
             let eng = Arc::clone(&engine);
@@ -427,11 +458,19 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
                                 let quality = val.get("quality").and_then(|q| q.as_str()).unwrap_or("best");
                                 match video_mgr.app_handle() {
                                     Some(app) => {
-                                        host_setup::bring_to_front(&app);
-                                        let _ = app.emit("extension-video-request", serde_json::json!({
+                                        let payload = serde_json::json!({
                                             "url": url_str,
+                                            "video": true,
                                             "quality": quality
-                                        }));
+                                        });
+                                        if dialogs::open(&app, "confirm", &payload).is_err() {
+                                            // pop-up could not open: fall back to the main window
+                                            host_setup::bring_to_front(&app);
+                                            let _ = app.emit("extension-video-request", serde_json::json!({
+                                                "url": url_str,
+                                                "quality": quality
+                                            }));
+                                        }
                                         (true, serde_json::json!({
                                             "status": "accepted",
                                             "accepted": true,
@@ -461,14 +500,17 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
                                     // Ask the user first (IDM-style "Download File Info" dialog)
                                     match video_mgr.app_handle() {
                                         Some(app) => {
-                                            host_setup::bring_to_front(&app);
-                                            let _ = app.emit("extension-download-request", serde_json::json!({
+                                            let payload = serde_json::json!({
                                                 "url": url_str,
                                                 "filename": val.get("filename").and_then(|f| f.as_str()).unwrap_or(""),
                                                 "totalBytes": val.get("total_bytes").or_else(|| val.get("totalBytes")).and_then(|t| t.as_u64()).unwrap_or(0),
                                                 "mimeType": val.get("mime_type").or_else(|| val.get("mimeType")).and_then(|m| m.as_str()).unwrap_or(""),
                                                 "referrer": val.get("referrer").and_then(|r| r.as_str()).unwrap_or("")
-                                            }));
+                                            });
+                                            if dialogs::open(&app, "confirm", &payload).is_err() {
+                                                host_setup::bring_to_front(&app);
+                                                let _ = app.emit("extension-download-request", payload.clone());
+                                            }
                                             (true, serde_json::json!({
                                                 "status": "accepted",
                                                 "accepted": true,
@@ -817,7 +859,7 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
+                if window.label() == "main" && CLOSE_TO_TRAY.load(Ordering::Relaxed) {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -887,6 +929,9 @@ fn main() {
             power_action,
             cancel_shutdown,
             torrent::check_torrent_file,
+            dialogs::open_dialog,
+            host_setup::open_file,
+            host_setup::reveal_file,
             net_config::set_network_config,
             net_config::set_max_concurrent,
             video::probe_video,
