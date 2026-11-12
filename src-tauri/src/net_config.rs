@@ -1,12 +1,17 @@
 //! Network settings shared by every downloader: proxy and the number of parallel downloads.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use serde::Deserialize;
 
 static PROXY: Mutex<Option<String>> = Mutex::new(None);
 static MAX_CONCURRENT: AtomicUsize = AtomicUsize::new(3);
+/// Seeding stops at this share ratio x100 (0 = do not seed after the download)
+static SEED_RATIO_X100: AtomicU32 = AtomicU32::new(0);
+/// Overall torrent speed limits in KiB/s (0 = unlimited)
+static TORRENT_DOWN_KIB: AtomicU32 = AtomicU32::new(0);
+static TORRENT_UP_KIB: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyConfig {
@@ -59,4 +64,18 @@ pub fn set_network_config(config: ProxyConfig) -> Result<(), String> {
 #[tauri::command]
 pub fn set_max_concurrent(value: usize) {
     MAX_CONCURRENT.store(value.clamp(1, 20), Ordering::Relaxed);
+}
+
+pub fn seed_ratio_x100() -> u32 {
+    SEED_RATIO_X100.load(Ordering::Relaxed)
+}
+
+pub fn torrent_limits_kib() -> (u32, u32) {
+    (TORRENT_DOWN_KIB.load(Ordering::Relaxed), TORRENT_UP_KIB.load(Ordering::Relaxed))
+}
+
+pub fn store_torrent_settings(seed_ratio: f64, down_kib: u32, up_kib: u32) {
+    SEED_RATIO_X100.store((seed_ratio.max(0.0) * 100.0).round().min(100000.0) as u32, Ordering::Relaxed);
+    TORRENT_DOWN_KIB.store(down_kib, Ordering::Relaxed);
+    TORRENT_UP_KIB.store(up_kib, Ordering::Relaxed);
 }

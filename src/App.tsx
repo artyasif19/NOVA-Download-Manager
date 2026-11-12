@@ -12,6 +12,7 @@ import { AddDownloadModal } from './components/AddDownloadModal';
 import { DownloadDetailsModal } from './components/DownloadDetailsModal';
 import { VideoSnifferLab } from './components/VideoSnifferLab';
 import { SpeedTest } from './components/SpeedTest';
+import { TorrentsView } from './components/TorrentsView';
 import { DownloadConfirmModal, ExtensionDownloadRequest } from './components/DownloadConfirmModal';
 import { BatchDownloadModal } from './components/BatchDownloadModal';
 import { BrowserExtensionHub } from './components/BrowserExtensionHub';
@@ -47,7 +48,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const [activeView, setActiveView] = useState<'downloads' | 'video_sniffer' | 'browser_hub' | 'speed_test'>('downloads');
+  const [activeView, setActiveView] = useState<'downloads' | 'video_sniffer' | 'browser_hub' | 'speed_test' | 'torrents'>('downloads');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [videoPrefill, setVideoPrefill] = useState<{ url: string; quality?: string; nonce: number } | null>(null);
   const [extRequest, setExtRequest] = useState<ExtensionDownloadRequest | null>(null);
@@ -58,6 +59,8 @@ export default function App() {
   const dismissedClipsRef = useRef<Set<string>>(new Set());
   const addOpenRef = useRef(false);
   const armedRef = useRef(false);
+  const autoMagnetRef = useRef<((url: string) => void) | null>(null);
+  const autoAddRef = useRef(false);
 
   // Opens Add Download with a link (copied link, magnet: handler, second NOVA launch)
   const openAddWithLink = (url: string) => {
@@ -152,6 +155,19 @@ export default function App() {
     invokeCommand('set_close_to_tray', { enabled: settings.minimizeToTray }).catch(() => {});
   }, [settings.minimizeToTray]);
 
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    invokeCommand('set_torrent_settings', {
+      seedRatio: settings.torrentSeedRatio || 0,
+      downKib: Math.max(0, Math.floor(settings.torrentDownLimit || 0)),
+      upKib: Math.max(0, Math.floor(settings.torrentUpLimit || 0)),
+    }).catch(() => {});
+  }, [settings.torrentSeedRatio, settings.torrentDownLimit, settings.torrentUpLimit]);
+
+  useEffect(() => {
+    autoAddRef.current = settings.autoAddMagnets;
+  }, [settings.autoAddMagnets]);
+
   // Clipboard monitor: offer to download links that were just copied
   useEffect(() => {
     addOpenRef.current = isAddModalOpen;
@@ -172,6 +188,10 @@ export default function App() {
       if (addOpenRef.current) return;
       const kind = classifyLink(text);
       if (!kind || dismissedClipsRef.current.has(text)) return;
+      if (kind === 'magnet' && autoAddRef.current && autoMagnetRef.current) {
+        autoMagnetRef.current(text);
+        return;
+      }
       setClipOffer({ url: text, kind });
     };
     const timer = setInterval(tick, 1500);
@@ -780,6 +800,34 @@ export default function App() {
     }
   };
 
+  autoMagnetRef.current = (url: string) => {
+    let name = 'Fetching torrent info...';
+    try {
+      const dn = new URLSearchParams(url.replace(/^magnet:\?/i, '')).get('dn');
+      if (dn) name = dn;
+    } catch {
+      /* keep default */
+    }
+    const item: DownloadItem = {
+      id: `dl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      url,
+      filename: name,
+      directory: settings.defaultFolder,
+      totalBytes: 0,
+      downloadedBytes: 0,
+      speed: 0,
+      status: 'downloading',
+      category: 'custom',
+      protocol: 'torrent',
+      segmentsCount: 1,
+      segments: [],
+      supportsRange: true,
+      dateAdded: Date.now(),
+      priority: 'normal',
+    };
+    handleAddDownload(item, true);
+  };
+
   const handleOpenFile = (item: DownloadItem) => {
     showToast(`Opening file: ${item.filename}`);
   };
@@ -924,6 +972,29 @@ export default function App() {
         )}
 
         {activeView === 'speed_test' && <SpeedTest accentClasses={accentClasses} />}
+
+        {activeView === 'torrents' && (
+          <TorrentsView
+            downloads={downloads}
+            settings={settings}
+            accentClasses={accentClasses}
+            onAdd={() => {
+              setVideoPrefill({ url: 'magnet:', nonce: Date.now() });
+              setIsAddModalOpen(true);
+            }}
+            onPause={handlePause}
+            onResume={handleResume}
+            onRemove={async (id, deleteFiles) => {
+              if (deleteFiles && !window.confirm('Remove this torrent and delete the downloaded files too?')) return;
+              try {
+                await invokeCommand('torrent_delete', { id, deleteFiles });
+              } catch {
+                /* still remove it from the list */
+              }
+              setDownloads((prev) => prev.filter((d) => d.id !== id));
+            }}
+          />
+        )}
 
         {activeView === 'browser_hub' && (
           <BrowserExtensionHub

@@ -43,6 +43,7 @@ type ConfirmData = {
   mimeType?: string;
   referrer?: string;
   video?: boolean;
+  torrent?: boolean;
   quality?: string;
 };
 
@@ -78,11 +79,23 @@ async function closeSelf() {
 const ConfirmView: React.FC<{ data: ConfirmData; settings: AppSettings }> = ({ data, settings }) => {
   const accent = getAccentClasses(settings.accentColor);
   const isVideo = Boolean(data.video);
+  const isTorrent = Boolean(data.torrent);
 
-  const [filename, setFilename] = useState(data.filename || nameFromUrl(data.url) || (isVideo ? 'Reading video...' : 'download.dat'));
+  const magnetName = (() => {
+    if (!isTorrent) return '';
+    try {
+      const dn = new URLSearchParams(data.url.replace(/^magnet:\?/i, '')).get('dn');
+      return dn || '';
+    } catch {
+      return '';
+    }
+  })();
+  const [filename, setFilename] = useState(
+    isTorrent ? magnetName || 'Torrent (name is read after it starts)' : data.filename || nameFromUrl(data.url) || (isVideo ? 'Reading video...' : 'download.dat')
+  );
   const [directory, setDirectory] = useState(settings.defaultFolder);
   const [category, setCategory] = useState<DownloadItem['category']>(
-    isVideo ? 'video_audio' : categorizeExtension(getFileExtension(data.filename || nameFromUrl(data.url)))
+    isTorrent ? 'custom' : isVideo ? 'video_audio' : categorizeExtension(getFileExtension(data.filename || nameFromUrl(data.url)))
   );
   const [description, setDescription] = useState('');
   const [totalBytes, setTotalBytes] = useState(data.totalBytes || 0);
@@ -104,7 +117,9 @@ const ConfirmView: React.FC<{ data: ConfirmData; settings: AppSettings }> = ({ d
     let cancelled = false;
     (async () => {
       try {
-        if (isVideo) {
+        if (isTorrent) {
+          return;
+        } else if (isVideo) {
           const info = await probeVideo(data.url);
           if (cancelled) return;
           setVideoInfo(info);
@@ -141,6 +156,25 @@ const ConfirmView: React.FC<{ data: ConfirmData; settings: AppSettings }> = ({ d
 
   const buildItem = (status: DownloadItem['status']): DownloadItem => {
     const id = `dl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    if (isTorrent) {
+      return {
+        id,
+        url: data.url,
+        filename: magnetName || 'Fetching torrent info...',
+        directory,
+        totalBytes: 0,
+        downloadedBytes: 0,
+        speed: 0,
+        status,
+        category: 'custom',
+        protocol: 'torrent',
+        segmentsCount: 1,
+        segments: [],
+        supportsRange: true,
+        dateAdded: Date.now(),
+        priority: 'normal',
+      };
+    }
     if (isVideo) {
       return {
         id,
@@ -204,6 +238,8 @@ const ConfirmView: React.FC<{ data: ConfirmData; settings: AppSettings }> = ({ d
             quality: item.videoQuality,
           },
         });
+      } else if (isTorrent) {
+        await invokeCommand('start_torrent', { request: { id: item.id, url: item.url, directory: item.directory } });
       } else if (isVideo) {
         await invokeCommand('start_video_download', {
           request: { id: item.id, url: item.url, directory: item.directory, quality: item.videoQuality || 'best' },
@@ -291,7 +327,7 @@ const ConfirmView: React.FC<{ data: ConfirmData; settings: AppSettings }> = ({ d
               </button>
             </div>
 
-            {!isVideo && (
+            {!isVideo && !isTorrent && (
               <div className="flex items-center gap-2">
                 <label className="w-20 shrink-0 text-slate-300">File name</label>
                 <input
@@ -314,10 +350,10 @@ const ConfirmView: React.FC<{ data: ConfirmData; settings: AppSettings }> = ({ d
 
           <div className="w-24 shrink-0 text-center pt-1">
             <div className="mx-auto w-12 h-14 rounded bg-white/[0.08] border border-white/[0.12] flex items-center justify-center text-[10px] font-bold text-slate-300">
-              {(getFileExtension(filename) || (isVideo ? 'video' : 'file')).slice(0, 5).toUpperCase()}
+              {isTorrent ? 'TORRENT' : (getFileExtension(filename) || (isVideo ? 'video' : 'file')).slice(0, 5).toUpperCase()}
             </div>
             <div className="mt-1.5 font-mono text-sm text-slate-100">
-              {busy && shownSize === 0 ? '...' : shownSize > 0 ? `${isVideo ? '~' : ''}${formatBytes(shownSize)}` : 'Unknown'}
+              {isTorrent ? 'Magnet' : busy && shownSize === 0 ? '...' : shownSize > 0 ? `${isVideo ? '~' : ''}${formatBytes(shownSize)}` : 'Unknown'}
             </div>
           </div>
         </div>

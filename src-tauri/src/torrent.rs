@@ -67,6 +67,8 @@ struct Inner {
     db: Arc<Database>,
     daemon: tokio::sync::Mutex<Option<Daemon>>,
     jobs: Mutex<HashMap<String, oneshot::Sender<&'static str>>>,
+    /// NOVA download id -> aria2 task id (kept after completion while the torrent seeds)
+    gids: Mutex<HashMap<String, String>>,
     http: reqwest::Client,
 }
 
@@ -111,6 +113,7 @@ impl TorrentManager {
                 db,
                 daemon: tokio::sync::Mutex::new(None),
                 jobs: Mutex::new(HashMap::new()),
+                gids: Mutex::new(HashMap::new()),
                 http,
             }),
         }
@@ -234,7 +237,6 @@ impl TorrentManager {
             .arg("--rpc-listen-all=false")
             .arg("--rpc-allow-origin-all=false")
             .arg("--max-concurrent-downloads=10")
-            .arg("--seed-time=0")
             .arg("--file-allocation=none")
             .arg("--continue=true")
             .arg("--auto-file-renaming=true")
@@ -246,6 +248,19 @@ impl TorrentManager {
             .arg(format!("--stop-with-process={}", std::process::id()));
         if let Some(p) = crate::net_config::current_proxy() {
             cmd.arg(format!("--all-proxy={}", p));
+        }
+        let ratio = crate::net_config::seed_ratio_x100();
+        if ratio > 0 {
+            cmd.arg(format!("--seed-ratio={:.2}", ratio as f64 / 100.0));
+        } else {
+            cmd.arg("--seed-time=0");
+        }
+        let (down_kib, up_kib) = crate::net_config::torrent_limits_kib();
+        if down_kib > 0 {
+            cmd.arg(format!("--max-overall-download-limit={}K", down_kib));
+        }
+        if up_kib > 0 {
+            cmd.arg(format!("--max-overall-upload-limit={}K", up_kib));
         }
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
         #[cfg(windows)]
@@ -286,6 +301,222 @@ impl TorrentManager {
             return Err(msg.to_string());
         }
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    // ---------------------------------------------------------------- live information
+
+    async fn daemon_info(&self) -> Option<(u16, String)> {
+        let mut guard = self.inner.daemon.lock().await;
+        match guard.as_mut() {
+            Some(d) => {
+                if matches!(d.child.try_wait(), Ok(None)) {
+                    Some((d.port, d.secret.clone()))
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+
+    fn gid_of(&self, id: &str) -> Option<String> {
+        self.inner.gids.lock().unwrap().get(id).cloned()
+    }
+
+    /// Short live numbers for every torrent NOVA started in this session (for the table).
+    pub async fn overview(&self) -> Vec<Value> {
+        let (port, secret) = match self.daemon_info().await {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+        let entries: Vec<(String, String)> = self
+            .inner
+            .gids
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let keys = json!(["status", "totalLength", "completedLength", "uploadLength", "downloadSpeed", "uploadSpeed", "numSeeders", "connections"]);
+        let mut out = Vec::new();
+        for (id, gid) in entries {
+            if let Ok(st) = self.rpc_raw(port, &secret, "aria2.tellStatus", vec![json!(gid), keys.clone()]).await {
+                let total = num(&st, "totalLength");
+                let done = num(&st, "completedLength");
+                let up = num(&st, "uploadLength");
+                let down_speed = num(&st, "downloadSpeed");
+                let status = st.get("status").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                out.push(json!({
+                    "id": id,
+                    "aria_status": status,
+                    "seeding": status == "active" && total > 0 && done >= total,
+                    "total_bytes": total,
+                    "completed_bytes": done,
+                    "uploaded_bytes": up,
+                    "ratio": if done > 0 { up as f64 / done as f64 } else { 0.0 },
+                    "down_speed": down_speed,
+                    "up_speed": num(&st, "uploadSpeed"),
+                    "seeders": num(&st, "numSeeders"),
+                    "connections": num(&st, "connections"),
+                    "eta": if down_speed > 0 && total > done { (total - done) / down_speed } else { 0 }
+                }));
+            }
+        }
+        out
+    }
+
+    /// Everything the "General / Trackers / Peers / Content" tabs show for one torrent.
+    pub async fn details(&self, id: &str) -> Result<Value, String> {
+        let gid = self.gid_of(id).ok_or_else(|| "This torrent is not active right now".to_string())?;
+        let (port, secret) = self.daemon_info().await.ok_or_else(|| "The torrent engine is not running".to_string())?;
+        let st = self.rpc_raw(port, &secret, "aria2.tellStatus", vec![json!(gid)]).await?;
+        let peers = self
+            .rpc_raw(port, &secret, "aria2.getPeers", vec![json!(gid)])
+            .await
+            .unwrap_or(Value::Array(Vec::new()));
+
+        let bt = st.get("bittorrent").cloned().unwrap_or(Value::Null);
+        let announce: Vec<Value> = bt
+            .get("announceList")
+            .and_then(|a| a.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let files: Vec<Value> = st
+            .get("files")
+            .and_then(|f| f.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|f| {
+                        json!({
+                            "path": f.get("path").and_then(|p| p.as_str()).unwrap_or(""),
+                            "length": num(f, "length"),
+                            "completed": num(f, "completedLength"),
+                            "selected": f.get("selected").and_then(|s| s.as_str()).unwrap_or("true") == "true"
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let peer_list: Vec<Value> = peers
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|p| {
+                        json!({
+                            "ip": p.get("ip").and_then(|v| v.as_str()).unwrap_or(""),
+                            "port": p.get("port").and_then(|v| v.as_str()).unwrap_or(""),
+                            "down_speed": num(p, "downloadSpeed"),
+                            "up_speed": num(p, "uploadSpeed"),
+                            "seeder": p.get("seeder").and_then(|v| v.as_str()).unwrap_or("false") == "true"
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let total = num(&st, "totalLength");
+        let done = num(&st, "completedLength");
+        let up = num(&st, "uploadLength");
+        let status = st.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        Ok(json!({
+            "aria_status": status,
+            "seeding": status == "active" && total > 0 && done >= total,
+            "name": bt.get("info").and_then(|i| i.get("name")).and_then(|n| n.as_str()).unwrap_or(""),
+            "total_bytes": total,
+            "completed_bytes": done,
+            "uploaded_bytes": up,
+            "ratio": if done > 0 { up as f64 / done as f64 } else { 0.0 },
+            "down_speed": num(&st, "downloadSpeed"),
+            "up_speed": num(&st, "uploadSpeed"),
+            "seeders": num(&st, "numSeeders"),
+            "connections": num(&st, "connections"),
+            "pieces": num(&st, "numPieces"),
+            "piece_length": num(&st, "pieceLength"),
+            "info_hash": st.get("infoHash").and_then(|h| h.as_str()).unwrap_or(""),
+            "comment": bt.get("comment").and_then(|c| c.as_str()).unwrap_or(""),
+            "creation_date": bt.get("creationDate").and_then(|c| c.as_u64()).unwrap_or(0),
+            "private": false,
+            "dir": st.get("dir").and_then(|d| d.as_str()).unwrap_or(""),
+            "trackers": announce,
+            "files": files,
+            "peers": peer_list
+        }))
+    }
+
+    /// Per-torrent speed limits (KiB/s, 0 = unlimited) and seeding ratio (0 = keep aria2's default).
+    pub async fn set_options(&self, id: &str, down_kib: u32, up_kib: u32, seed_ratio: f64) -> Result<(), String> {
+        let gid = self.gid_of(id).ok_or_else(|| "This torrent is not active right now".to_string())?;
+        let (port, secret) = self.daemon_info().await.ok_or_else(|| "The torrent engine is not running".to_string())?;
+        let mut opts = serde_json::Map::new();
+        opts.insert("max-download-limit".into(), json!(format!("{}K", down_kib)));
+        opts.insert("max-upload-limit".into(), json!(format!("{}K", up_kib)));
+        if seed_ratio > 0.0 {
+            opts.insert("seed-ratio".into(), json!(format!("{:.2}", seed_ratio)));
+        }
+        self.rpc_raw(port, &secret, "aria2.changeOption", vec![json!(gid), Value::Object(opts)]).await?;
+        Ok(())
+    }
+
+    /// Applies new overall limits / seeding rules to the running engine (they are also used at next start).
+    pub async fn apply_global(&self) {
+        if let Some((port, secret)) = self.daemon_info().await {
+            let (down, up) = crate::net_config::torrent_limits_kib();
+            let ratio = crate::net_config::seed_ratio_x100();
+            let mut opts = serde_json::Map::new();
+            opts.insert("max-overall-download-limit".into(), json!(format!("{}K", down)));
+            opts.insert("max-overall-upload-limit".into(), json!(format!("{}K", up)));
+            if ratio > 0 {
+                opts.insert("seed-ratio".into(), json!(format!("{:.2}", ratio as f64 / 100.0)));
+            }
+            let _ = self.rpc_raw(port, &secret, "aria2.changeGlobalOption", vec![Value::Object(opts)]).await;
+        }
+    }
+
+    /// Stops the torrent for good, optionally deleting what was downloaded.
+    pub async fn delete(&self, id: &str, delete_files: bool) {
+        self.cancel(id);
+        // real name (the database may still say "Fetching torrent info...")
+        let mut real_name = String::new();
+        if let (Some(gid), Some((port, secret))) = (self.gid_of(id), self.daemon_info().await) {
+            if let Ok(st) = self
+                .rpc_raw(port, &secret, "aria2.tellStatus", vec![json!(gid), json!(["bittorrent", "files"])])
+                .await
+            {
+                real_name = st
+                    .get("bittorrent")
+                    .and_then(|b| b.get("info"))
+                    .and_then(|i| i.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+            }
+            let _ = self.rpc_raw(port, &secret, "aria2.forceRemove", vec![json!(gid.clone())]).await;
+            let _ = self.rpc_raw(port, &secret, "aria2.removeDownloadResult", vec![json!(gid)]).await;
+        }
+        self.inner.gids.lock().unwrap().remove(id);
+
+        if delete_files {
+            if let Ok(Some(rec)) = self.inner.db.get_download(id) {
+                let name = if !real_name.is_empty() { real_name } else { rec.filename.clone() };
+                let safe = !name.is_empty()
+                    && !name.contains("..")
+                    && !name.contains('/')
+                    && !name.contains('\\')
+                    && !name.starts_with("Fetching")
+                    && !rec.directory.trim().is_empty();
+                if safe {
+                    let path = Path::new(&rec.directory).join(&name);
+                    if path.is_dir() {
+                        let _ = std::fs::remove_dir_all(&path);
+                    } else {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    let mut control = path.into_os_string();
+                    control.push(".aria2");
+                    let _ = std::fs::remove_file(Path::new(&control));
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- job
@@ -340,6 +571,7 @@ impl TorrentManager {
             fail("The torrent engine did not accept this link".to_string());
             return;
         }
+        self.inner.gids.lock().unwrap().insert(id.clone(), gid.clone());
 
         let keys = json!([
             "status", "totalLength", "completedLength", "downloadSpeed", "uploadSpeed",
@@ -380,6 +612,7 @@ impl TorrentManager {
             {
                 if status == "complete" || status == "removed" {
                     gid = next.to_string();
+                    self.inner.gids.lock().unwrap().insert(id.clone(), gid.clone());
                     continue;
                 }
             }
@@ -411,6 +644,10 @@ impl TorrentManager {
                 }
             }
 
+            // Finished downloading but still seeding (status stays "active"): count it as complete
+            let seeding_done = status == "active" && name.is_some() && total > 0 && done >= total;
+            let status = if seeding_done { "complete" } else { status };
+
             match status {
                 "error" => {
                     let msg = st
@@ -427,7 +664,9 @@ impl TorrentManager {
                     let size = if last_total > 0 { last_total } else { done };
                     let full = Path::new(&directory).join(&fname).to_string_lossy().to_string();
                     let _ = db.complete_video_download(&id, &fname, &directory, size);
-                    let _ = self.rpc_raw(port, &secret, "aria2.removeDownloadResult", vec![json!(gid)]).await;
+                    if !seeding_done {
+                        let _ = self.rpc_raw(port, &secret, "aria2.removeDownloadResult", vec![json!(gid)]).await;
+                    }
                     let _ = app.emit(
                         "download-completed",
                         TorrentCompletedPayload {
@@ -482,4 +721,51 @@ pub fn check_torrent_file(path: String) -> Result<u64, String> {
         return Err("Please choose a .torrent file".to_string());
     }
     Ok(meta.len())
+}
+
+// ---------------------------------------------------------------------------
+// Commands for the Torrents tab
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn torrent_overview(state: tauri::State<'_, crate::AppState>) -> Result<Vec<Value>, String> {
+    Ok(state.torrent.overview().await)
+}
+
+#[tauri::command]
+pub async fn torrent_details(id: String, state: tauri::State<'_, crate::AppState>) -> Result<Value, String> {
+    state.torrent.details(&id).await
+}
+
+#[tauri::command]
+pub async fn torrent_set_options(
+    id: String,
+    down_kib: u32,
+    up_kib: u32,
+    seed_ratio: f64,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<(), String> {
+    state.torrent.set_options(&id, down_kib, up_kib, seed_ratio).await
+}
+
+#[tauri::command]
+pub async fn torrent_delete(
+    id: String,
+    delete_files: bool,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<(), String> {
+    state.torrent.delete(&id, delete_files).await;
+    state.db.delete_download(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_torrent_settings(
+    seed_ratio: f64,
+    down_kib: u32,
+    up_kib: u32,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<(), String> {
+    crate::net_config::store_torrent_settings(seed_ratio, down_kib, up_kib);
+    state.torrent.apply_global().await;
+    Ok(())
 }

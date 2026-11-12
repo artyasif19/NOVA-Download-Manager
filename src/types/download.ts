@@ -106,6 +106,10 @@ export interface AppSettings {
   speedLimitKBps: number;
   soundNotification: boolean;
   startWithWindows: boolean;
+  autoAddMagnets: boolean; // add copied magnet links without asking
+  torrentSeedRatio: number; // keep seeding until this share ratio (0 = do not seed)
+  torrentDownLimit: number; // KiB/s, 0 = unlimited
+  torrentUpLimit: number; // KiB/s, 0 = unlimited
   clipboardMonitor: boolean; // offer to download links copied to the clipboard
   afterDownloads: 'none' | 'exit' | 'sleep' | 'shutdown'; // action when every download has finished
   proxyMode: 'none' | 'http' | 'socks5';

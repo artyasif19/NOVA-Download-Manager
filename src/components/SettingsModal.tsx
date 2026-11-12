@@ -220,6 +220,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                   </div>
 
+                  <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
+                    <div>
+                      <div className="font-medium text-slate-200">Add copied magnet links automatically</div>
+                      <div className="text-[11px] text-slate-400">
+                        Magnet links you copy start downloading right away, without asking. Needs "Watch the clipboard" on.
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.autoAddMagnets}
+                      onChange={(e) => onUpdateSettings({ autoAddMagnets: e.target.checked })}
+                      className="rounded border-white/20 bg-slate-800 text-cyan-500 cursor-pointer"
+                    />
+                  </div>
+
                   <div className="pb-3 border-b border-white/[0.06]">
                     <div className="font-medium text-slate-200">When all downloads finish</div>
                     <div className="text-[11px] text-slate-400 mb-1.5">NOVA waits 20 seconds first, so you can cancel.</div>
@@ -415,6 +430,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       />
                     </div>
                   )}
+                </div>
+
+                <div className="pt-3 border-t border-white/[0.06] space-y-2">
+                  <div className="font-medium text-slate-200">Torrents</div>
+                  <div className="text-[11px] text-slate-400">Speed limits apply to all torrents. 0 means unlimited.</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="text-[11px] text-slate-300">
+                      Download limit (KiB/s)
+                      <input
+                        type="number"
+                        min={0}
+                        value={settings.torrentDownLimit}
+                        onChange={(e) => onUpdateSettings({ torrentDownLimit: Math.max(0, Number(e.target.value)) })}
+                        className="mt-1 w-full bg-[#0c0f15] border border-white/[0.1] rounded px-2 py-1.5 font-mono text-slate-200"
+                      />
+                    </label>
+                    <label className="text-[11px] text-slate-300">
+                      Upload limit (KiB/s)
+                      <input
+                        type="number"
+                        min={0}
+                        value={settings.torrentUpLimit}
+                        onChange={(e) => onUpdateSettings({ torrentUpLimit: Math.max(0, Number(e.target.value)) })}
+                        className="mt-1 w-full bg-[#0c0f15] border border-white/[0.1] rounded px-2 py-1.5 font-mono text-slate-200"
+                      />
+                    </label>
+                    <label className="text-[11px] text-slate-300">
+                      Seed until ratio (0 = off)
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={settings.torrentSeedRatio}
+                        onChange={(e) => onUpdateSettings({ torrentSeedRatio: Math.max(0, Number(e.target.value)) })}
+                        className="mt-1 w-full bg-[#0c0f15] border border-white/[0.1] rounded px-2 py-1.5 font-mono text-slate-200"
+                      />
+                    </label>
+                  </div>
                 </div>
               </div>
             )}

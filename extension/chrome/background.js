@@ -220,6 +220,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       timestamp: Date.now()
     }).then(sendResponse);
     return true;
+  } else if (message.action === "send_magnet") {
+    novaSend({
+      action: "can_handle",
+      url: message.url,
+      client: "chromium-extension",
+      timestamp: Date.now()
+    }).then(sendResponse);
+    return true;
   } else if (message.action === "video_info") {
     // Resolution list (size, codec, fps, HDR) for the floating button's menu
     novaSend({ action: "video_info", url: message.url }, 90000).then(sendResponse);

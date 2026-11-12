@@ -71,6 +71,16 @@ Project page:   https://github.com/artyasif19/NOVA-Download-Manager
    a .torrent link, or choose a .torrent file. Clicking a magnet
    link in your browser can open NOVA too (Windows may ask you to
    choose NOVA once under "Open with").
+ * Torrents tab: a qBittorrent-style list with progress, seeds,
+   peers, speeds, ETA and share ratio. Click a torrent for General,
+   Trackers, Peers and Content (files) details. Right-click for:
+   Start / Stop / Force Start, Remove (with or without deleting
+   files), speed limits and seeding ratio per torrent, open file,
+   open destination folder, copy name / info hash / magnet link.
+   Settings > Connections: overall speed limits and seed-until-ratio.
+ * Magnet links: copied magnet links are offered automatically
+   (Settings > General can add them without asking), and clicking a
+   magnet link on a web page opens NOVA when the extension is on.
  * Batch: the "Batch" button adds many files at once, from a link
    pattern like  https://site.com/img[001-050].jpg  or a pasted
    list of links. Batches use the queue and obey "Max concurrent

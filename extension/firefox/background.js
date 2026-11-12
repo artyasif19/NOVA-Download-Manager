@@ -201,6 +201,15 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }).then(res => sendResponse(res));
     return true;
   }
+  if (request.action === "send_magnet") {
+    novaSend({
+      action: "can_handle",
+      url: request.url,
+      client: "firefox-extension",
+      timestamp: Date.now()
+    }).then(res => sendResponse(res));
+    return true;
+  }
   if (request.action === "video_info") {
     novaSend({ action: "video_info", url: request.url }, 90000).then(res => sendResponse(res));
     return true;

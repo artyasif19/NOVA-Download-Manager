@@ -294,3 +294,22 @@
     place();
   }
 })();
+
+// ---- Magnet links: open them in NOVA (like a torrent client would) ----
+(function () {
+  document.addEventListener("click", function (e) {
+    if (e.defaultPrevented || e.button !== 0) return;
+    const a = e.target && e.target.closest ? e.target.closest('a[href^="magnet:"]') : null;
+    if (!a) return;
+    const href = a.getAttribute("href");
+    if (!href) return;
+    e.preventDefault();
+    e.stopPropagation();
+    chrome.runtime.sendMessage({ action: "send_magnet", url: href }, function (res) {
+      if (chrome.runtime.lastError || !res || res.error === "NOVA_ENGINE_NOT_RUNNING") {
+        // NOVA is not running: let Windows handle the magnet link as usual
+        window.location.href = href;
+      }
+    });
+  }, true);
+})();

@@ -105,6 +105,12 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
   // Opened by the browser extension's "Download this video" button
   useEffect(() => {
+    if (isOpen && prefill && prefill.url === 'magnet:') {
+      setUrl('');
+      setProtocol('torrent');
+      setVideoInfo(null);
+      return;
+    }
     if (isOpen && prefill && prefill.url) {
       setUrl(prefill.url);
       const kind = classifyLink(prefill.url);

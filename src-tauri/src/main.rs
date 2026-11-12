@@ -454,7 +454,29 @@ fn start_local_ipc_service(engine: Arc<DownloadEngine>, db: Arc<Database>, video
                                 && (val.get("video").and_then(|v| v.as_bool()).unwrap_or(false)
                                     || video::is_video_page_url(url_str));
 
-                            if wants_video {
+                            if url_str.starts_with("magnet:") {
+                                // Magnet link clicked in the browser: open the torrent pop-up
+                                match video_mgr.app_handle() {
+                                    Some(app) => {
+                                        let payload = serde_json::json!({ "url": url_str, "torrent": true });
+                                        if dialogs::open(&app, "confirm", &payload).is_err() {
+                                            host_setup::bring_to_front(&app);
+                                            let _ = app.emit("open-link", serde_json::json!({ "url": url_str }));
+                                        }
+                                        (true, serde_json::json!({
+                                            "status": "accepted",
+                                            "accepted": true,
+                                            "confirm": true,
+                                            "torrent": true
+                                        }).to_string())
+                                    }
+                                    None => (false, serde_json::json!({
+                                        "status": "rejected",
+                                        "accepted": false,
+                                        "reason": "NOVA is still starting, please try again in a moment"
+                                    }).to_string()),
+                                }
+                            } else if wants_video {
                                 let quality = val.get("quality").and_then(|q| q.as_str()).unwrap_or("best");
                                 match video_mgr.app_handle() {
                                     Some(app) => {
@@ -929,6 +951,11 @@ fn main() {
             power_action,
             cancel_shutdown,
             torrent::check_torrent_file,
+            torrent::torrent_overview,
+            torrent::torrent_details,
+            torrent::torrent_set_options,
+            torrent::torrent_delete,
+            torrent::set_torrent_settings,
             dialogs::open_dialog,
             host_setup::open_file,
             host_setup::reveal_file,
