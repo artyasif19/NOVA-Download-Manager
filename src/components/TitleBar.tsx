@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Download, 
   Minus, 
@@ -18,6 +18,7 @@ import {
 import { formatSpeed } from '../utils/formatters';
 import { AppSettings } from '../types/download';
 import { isTauriEnvironment } from '../services/tauriBridge';
+import { getVersion } from '@tauri-apps/api/app';
 
 async function windowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
   if (!isTauriEnvironment()) return;
@@ -58,6 +59,11 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onOpenSettings,
   onOpenAbout,
 }) => {
+  const [appVersion, setAppVersion] = useState('2.5');
+  useEffect(() => {
+    if (isTauriEnvironment()) getVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
   return (
     <header data-tauri-drag-region className="h-10 bg-[#0c0e12] border-b border-white/[0.07] flex items-center justify-between px-3 select-none shrink-0 z-50">
       {/* App Branding & Window Identifier */}
@@ -71,7 +77,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             Download Manager
           </span>
           <span className="text-[10px] text-slate-400 font-mono">
-            v2.4
+            v{appVersion}
           </span>
         </div>
       </div>

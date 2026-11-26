@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { isTauriEnvironment, pickFolder } from '../services/tauriBridge';
-import React, { useState } from 'react';
+import { checkForUpdate, getYtdlpVersion, isTauriEnvironment, pickFolder, updateYtdlp } from '../services/tauriBridge';
+import React, { useEffect, useState } from 'react';
 import { 
   X, 
   Settings, 
@@ -51,6 +51,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   totalDownloadsCount,
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'downloads' | 'connections' | 'appearance' | 'privacy' | 'about'>('general');
+  const [updateMsg, setUpdateMsg] = useState('');
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [ytdlpVersion, setYtdlpVersion] = useState('');
+  const [ytdlpMsg, setYtdlpMsg] = useState('');
+  const [ytdlpBusy, setYtdlpBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen || !isTauriEnvironment()) return;
+    getYtdlpVersion()
+      .then(setYtdlpVersion)
+      .catch(() => setYtdlpVersion(''));
+  }, [isOpen]);
+
+  const runUpdateCheck = async () => {
+    setCheckingUpdate(true);
+    setUpdateMsg('');
+    try {
+      const info = await checkForUpdate();
+      if (info.available) {
+        setUpdateMsg(`NOVA ${info.latest} is available.`);
+        window.dispatchEvent(new CustomEvent('nova-update-found', { detail: info }));
+      } else {
+        setUpdateMsg(`You have the latest version (${info.current}).`);
+      }
+    } catch (e: any) {
+      setUpdateMsg(String(e?.message || e));
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const runYtdlpUpdate = async () => {
+    setYtdlpBusy(true);
+    setYtdlpMsg('');
+    try {
+      const r = await updateYtdlp();
+      setYtdlpVersion(r.new_version);
+      setYtdlpMsg(r.updated ? `Updated from ${r.old_version || 'the built-in version'} to ${r.new_version}.` : r.message);
+    } catch (e: any) {
+      setYtdlpMsg(String(e?.message || e));
+    } finally {
+      setYtdlpBusy(false);
+    }
+  };
   const [clearedNotice, setClearedNotice] = useState(false);
 
   if (!isOpen) return null;
@@ -202,6 +246,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onChange={(e) => onUpdateSettings({ minimizeToTray: e.target.checked })}
                       className="rounded border-white/20 bg-slate-800 text-cyan-500 cursor-pointer"
                     />
+                  </div>
+
+                  <div className="pb-3 border-b border-white/[0.06] space-y-2.5">
+                    <div className="font-medium text-slate-200">Updates</div>
+                    <label className="flex items-center justify-between text-slate-300">
+                      <span>Check for a new NOVA version when NOVA starts</span>
+                      <input
+                        type="checkbox"
+                        checked={settings.checkUpdatesOnStart}
+                        onChange={(e) => onUpdateSettings({ checkUpdatesOnStart: e.target.checked, skippedVersion: '' })}
+                        className="rounded border-white/20 bg-slate-800 text-cyan-500 cursor-pointer"
+                      />
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={runUpdateCheck}
+                        disabled={checkingUpdate || !isTauriEnvironment()}
+                        className="px-3 py-1.5 rounded-md bg-white/[0.08] hover:bg-white/[0.15] text-slate-100 disabled:opacity-50"
+                      >
+                        {checkingUpdate ? 'Checking...' : 'Check for updates now'}
+                      </button>
+                      <span className="text-[11px] text-slate-400">{updateMsg}</span>
+                    </div>
+
+                    <div className="pt-2 border-t border-white/[0.06]">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-slate-200">Video downloader (yt-dlp)</div>
+                          <div className="text-[11px] text-slate-400">
+                            Version: {ytdlpVersion || 'unknown'}. Video sites change often; a newer yt-dlp usually fixes broken downloads.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={runYtdlpUpdate}
+                          disabled={ytdlpBusy || !isTauriEnvironment()}
+                          className="px-3 py-1.5 rounded-md bg-white/[0.08] hover:bg-white/[0.15] text-slate-100 disabled:opacity-50 shrink-0 ml-3"
+                        >
+                          {ytdlpBusy ? 'Updating...' : 'Update yt-dlp now'}
+                        </button>
+                      </div>
+                      <label className="flex items-center justify-between text-slate-300 mt-2">
+                        <span>Keep yt-dlp up to date automatically (checks once a day)</span>
+                        <input
+                          type="checkbox"
+                          checked={settings.autoUpdateYtdlp}
+                          onChange={(e) => onUpdateSettings({ autoUpdateYtdlp: e.target.checked })}
+                          className="rounded border-white/20 bg-slate-800 text-cyan-500 cursor-pointer"
+                        />
+                      </label>
+                      {ytdlpMsg && <div className="text-[11px] text-slate-300 mt-1">{ytdlpMsg}</div>}
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">

@@ -1,6 +1,6 @@
 [package]
 name = "nova-download-manager"
-version = "2.4.0"
+version = "2.5.0"
 description = "High-performance, privacy-first Windows download manager inspired by IDM"
 authors = ["NOVA Core Team"]
 edition = "2021"

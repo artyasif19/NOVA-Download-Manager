@@ -451,3 +451,62 @@ export function classifyLink(text: string): LinkKind {
   }
   return null;
 }
+
+
+// ---------------------------------------------------------------------------
+// Updates (NOVA and yt-dlp)
+// ---------------------------------------------------------------------------
+
+export interface UpdateInfo {
+  available: boolean;
+  current: string;
+  latest: string;
+  name: string;
+  notes: string;
+  page_url: string;
+  asset_name: string;
+  asset_url: string;
+  asset_size: number;
+  sha256: string;
+}
+
+export async function checkForUpdate(): Promise<UpdateInfo> {
+  return invoke<UpdateInfo>('check_for_update');
+}
+
+export async function downloadUpdate(info: UpdateInfo): Promise<string> {
+  return invoke<string>('download_update', {
+    url: info.asset_url,
+    name: info.asset_name,
+    size: info.asset_size,
+    sha256: info.sha256,
+  });
+}
+
+export async function installUpdate(path: string): Promise<void> {
+  await invoke('install_update', { path });
+}
+
+export async function openUrl(url: string): Promise<void> {
+  if (!isTauriEnvironment() || !url) return;
+  try {
+    await invoke('open_url', { url });
+  } catch (err) {
+    console.error('Open link failed:', err);
+  }
+}
+
+export interface YtdlpUpdate {
+  updated: boolean;
+  old_version: string;
+  new_version: string;
+  message: string;
+}
+
+export async function getYtdlpVersion(): Promise<string> {
+  return invoke<string>('ytdlp_version');
+}
+
+export async function updateYtdlp(): Promise<YtdlpUpdate> {
+  return invoke<YtdlpUpdate>('update_ytdlp');
+}

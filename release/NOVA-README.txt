@@ -91,6 +91,12 @@ Project page:   https://github.com/artyasif19/NOVA-Download-Manager
    shut it down after the last download (20 second warning).
  * Tray: closing the window keeps NOVA running in the system tray
    (right-click the tray icon > Exit NOVA to quit).
+ * Updates: NOVA checks GitHub for a new version when it starts and
+   shows what is new. "Update now" downloads the installer and
+   updates NOVA in place (your settings and downloads stay).
+   Settings > General > Updates also updates yt-dlp, the video
+   downloader, so broken video downloads can be fixed without a new
+   NOVA version.
  * Proxy: Settings > Connections (HTTP or SOCKS5, with login).
  * Settings > Appearance: Dark, Light and Liquid Glass themes,
    gradient styles, custom colors and your own background picture.

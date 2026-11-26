@@ -13,6 +13,7 @@ import { DownloadDetailsModal } from './components/DownloadDetailsModal';
 import { VideoSnifferLab } from './components/VideoSnifferLab';
 import { SpeedTest } from './components/SpeedTest';
 import { TorrentsView } from './components/TorrentsView';
+import { UpdateModal } from './components/UpdateModal';
 import { DownloadConfirmModal, ExtensionDownloadRequest } from './components/DownloadConfirmModal';
 import { BatchDownloadModal } from './components/BatchDownloadModal';
 import { BrowserExtensionHub } from './components/BrowserExtensionHub';
@@ -35,7 +36,7 @@ import {
 } from './services/storage';
 import { getAccentClasses, formatScheduledDateTime } from './utils/formatters';
 import { startRealDownload, pauseRealDownload, cancelRealDownload } from './services/realDownloader';
-import { classifyLink, readClipboardText, fetchAllDownloads, getNativeDefaultFolder, invokeCommand, isTauriEnvironment, setAutostart, setupNativeDownloadListeners } from './services/tauriBridge';
+import { UpdateInfo, checkForUpdate, updateYtdlp, classifyLink, readClipboardText, fetchAllDownloads, getNativeDefaultFolder, invokeCommand, isTauriEnvironment, setAutostart, setupNativeDownloadListeners } from './services/tauriBridge';
 import { listen } from '@tauri-apps/api/event';
 
 export default function App() {
@@ -53,6 +54,7 @@ export default function App() {
   const [videoPrefill, setVideoPrefill] = useState<{ url: string; quality?: string; nonce: number } | null>(null);
   const [extRequest, setExtRequest] = useState<ExtensionDownloadRequest | null>(null);
   const [isBatchOpen, setIsBatchOpen] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [clipOffer, setClipOffer] = useState<{ url: string; kind: string } | null>(null);
   const [powerCountdown, setPowerCountdown] = useState<{ action: string; left: number } | null>(null);
   const lastClipRef = useRef<string | null>(null);
@@ -230,6 +232,46 @@ export default function App() {
     const t = setTimeout(() => setPowerCountdown((c) => (c ? { ...c, left: c.left - 1 } : c)), 1000);
     return () => clearTimeout(t);
   }, [powerCountdown]);
+
+  // Look for a new NOVA version at start (and when Settings > Check for updates finds one)
+  useEffect(() => {
+    const onFound = (e: Event) => setUpdateInfo((e as CustomEvent<UpdateInfo>).detail);
+    window.addEventListener('nova-update-found', onFound);
+    return () => window.removeEventListener('nova-update-found', onFound);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriEnvironment() || !settings.checkUpdatesOnStart) return;
+    const t = setTimeout(async () => {
+      try {
+        const info = await checkForUpdate();
+        if (info.available && info.latest !== settings.skippedVersion) setUpdateInfo(info);
+      } catch {
+        /* offline or releases not public: stay quiet */
+      }
+    }, 6000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep yt-dlp (video downloader) current: one quiet check per day
+  useEffect(() => {
+    if (!isTauriEnvironment() || !settings.autoUpdateYtdlp) return;
+    const KEY = 'nova_ytdlp_last_check';
+    const last = Number(localStorage.getItem(KEY) || 0);
+    if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+    const t = setTimeout(async () => {
+      try {
+        const r = await updateYtdlp();
+        localStorage.setItem(KEY, String(Date.now()));
+        if (r.updated) showToast(`Video downloader updated to ${r.new_version}`);
+      } catch {
+        /* try again at the next start */
+      }
+    }, 20000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Start with Windows
   useEffect(() => {
@@ -1020,6 +1062,16 @@ export default function App() {
         onClose={() => setExtRequest(null)}
         onAddDownload={handleAddDownload}
         accentClasses={accentClasses}
+      />
+
+      <UpdateModal
+        info={updateInfo}
+        accentClasses={accentClasses}
+        onClose={() => setUpdateInfo(null)}
+        onSkip={(version) => {
+          setSettings((prev) => ({ ...prev, skippedVersion: version }));
+          setUpdateInfo(null);
+        }}
       />
 
       <BatchDownloadModal

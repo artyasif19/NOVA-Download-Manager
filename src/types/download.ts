@@ -106,6 +106,9 @@ export interface AppSettings {
   speedLimitKBps: number;
   soundNotification: boolean;
   startWithWindows: boolean;
+  checkUpdatesOnStart: boolean; // look for a new NOVA version at every start
+  skippedVersion: string; // a NOVA version the user chose to skip
+  autoUpdateYtdlp: boolean; // keep the video downloader (yt-dlp) up to date
   autoAddMagnets: boolean; // add copied magnet links without asking
   torrentSeedRatio: number; // keep seeding until this share ratio (0 = do not seed)
   torrentDownLimit: number; // KiB/s, 0 = unlimited

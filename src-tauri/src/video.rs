@@ -227,7 +227,14 @@ fn emit_status(app: &AppHandle, id: &str, status: &str) {
 }
 
 /// Finds a bundled helper tool (yt-dlp.exe / ffmpeg.exe / ffprobe.exe).
-fn find_tool(app: &AppHandle, name: &str) -> Option<PathBuf> {
+pub fn find_tool(app: &AppHandle, name: &str) -> Option<PathBuf> {
+    // an updated yt-dlp (Settings > Updates) wins over the copy inside the installer
+    if name.eq_ignore_ascii_case("yt-dlp.exe") {
+        let updated = crate::updater::ytdlp_override_path();
+        if updated.is_file() {
+            return Some(updated);
+        }
+    }
     crate::host_setup::find_resource_file(app, name)
 }
 

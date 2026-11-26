@@ -6,6 +6,7 @@ mod db;
 mod video;
 mod host_setup;
 mod dialogs;
+mod updater;
 mod net_config;
 mod torrent;
 
@@ -957,6 +958,12 @@ fn main() {
             torrent::torrent_delete,
             torrent::set_torrent_settings,
             dialogs::open_dialog,
+            updater::check_for_update,
+            updater::download_update,
+            updater::install_update,
+            updater::open_url,
+            updater::ytdlp_version,
+            updater::update_ytdlp,
             host_setup::open_file,
             host_setup::reveal_file,
             net_config::set_network_config,
